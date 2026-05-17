@@ -170,15 +170,23 @@ def stream_points(
     joints: list[JointCfg],
     points: list[np.ndarray],
     duration: float,
+    label: str,
 ) -> None:
     if not points:
         return
     interval = duration / len(points)
     vlims = [joint.vlim for joint in joints]
-    for point in points:
+    print(f"[move:{label}] start streaming {len(points)} points, dt={interval:.3f}s")
+    for idx, point in enumerate(points, start=1):
         for motor, target, vlim in zip(motors, point, vlims):
             motor.send_pos_vel(float(target), float(vlim))
+        if idx == 1 or idx == len(points) or idx % 25 == 0:
+            print(
+                f"[move:{label}] point {idx:03d}/{len(points)} "
+                f"q={[round(float(v), 3) for v in point]}"
+            )
         time.sleep(interval)
+    print(f"[move:{label}] done")
 
 
 def main() -> int:
@@ -211,7 +219,11 @@ def main() -> int:
 
     channel, joints = load_arm_config(Path(args.arm_config))
     print(f"Connecting to {channel}")
+    print("=" * 72)
+    print("Recorded IK/POS_VEL sequence")
     print("Sequence:", " -> ".join(args.sequence))
+    print(f"Duration per segment: {args.duration:.2f}s")
+    print("=" * 72)
 
     ctrl = Controller.from_dm_serial(channel, args.serial_baud)
     motors = []
@@ -237,17 +249,29 @@ def main() -> int:
 
         for label in args.sequence:
             pose = poses[label]
+            if len(pose.joints_rad) == len(joints):
+                recorded_joints = [round(float(v), 3) for v in pose.joints_rad]
+            else:
+                recorded_joints = []
             print(
-                f"\nPlanning {label}: xyz={tuple(round(v, 4) for v in pose.xyz)} "
-                f"rpy={tuple(round(v, 4) for v in pose.rpy_rad)}"
+                f"\n[target:{label}] "
+                f"xyz={tuple(round(v, 4) for v in pose.xyz)} "
+                f"rpy={tuple(round(v, 4) for v in pose.rpy_rad)} "
+                f"recorded_q={recorded_joints}"
             )
             points = plan_to_pose(pose, q_curr, args.duration)
-            print(f"Streaming {len(points)} points over {args.duration:.2f}s")
-            stream_points(motors, joints, points, args.duration)
+            print(
+                f"[target:{label}] planned {len(points)} points: "
+                f"q_start={[round(float(v), 3) for v in points[0]]} "
+                f"q_end={[round(float(v), 3) for v in points[-1]]}"
+            )
+            stream_points(motors, joints, points, args.duration, label=label)
             q_curr = points[-1].copy()
             time.sleep(0.25)
 
-        print("\nSequence complete.")
+        print("\n" + "=" * 72)
+        print("Sequence complete:", " -> ".join(args.sequence))
+        print("=" * 72)
     finally:
         if not args.no_disable:
             try:
