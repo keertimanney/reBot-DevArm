@@ -632,10 +632,11 @@ def _tool_move_block_in_grid(
                     duration=duration, label=f"src({from_i},{from_j})"):
         return f"IK failed — source ({from_i},{from_j}) unreachable"
 
+    _DZ = 0.007
     if grip_style == "edge":
-        grab_edge(ctrl, arm, gripper, duration=duration)
+        grab_edge(ctrl, arm, gripper, down_z=_GRAB_EDGE_DOWN_Z - _DZ, duration=duration)
     else:
-        grab_face(ctrl, arm, gripper, duration=duration)
+        grab_face(ctrl, arm, gripper, down_z=_GRAB_FACE_DOWN_Z - _DZ, duration=duration)
 
     if not _ik_move(ctrl, tx, ty, _Z_UP,
                     roll=0.0, pitch=math.pi / 2, yaw=0.0,
@@ -643,9 +644,9 @@ def _tool_move_block_in_grid(
         return f"IK failed — destination ({to_i},{to_j}) unreachable (block still held)"
 
     if grip_style == "edge":
-        drop_edge(ctrl, arm, gripper, duration=duration)
+        drop_edge(ctrl, arm, gripper, down_z=_DROP_EDGE_DOWN_Z - _DZ, duration=duration)
     else:
-        drop_face(ctrl, arm, gripper, duration=duration)
+        drop_face(ctrl, arm, gripper, down_z=_DROP_FACE_DOWN_Z - _DZ, duration=duration)
 
     return f"moved block from ({from_i},{from_j}) to ({to_i},{to_j})"
 
