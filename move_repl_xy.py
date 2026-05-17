@@ -449,6 +449,29 @@ AGENT_TOOLS = [
         },
     },
     {
+        "name": "move_block_in_grid",
+        "description": (
+            "Pick up a block from one grid cell and place it in another in a single operation. "
+            "Transits to source at raised height, grabs, transits to destination, drops. "
+            "Updates occupancy automatically: source becomes empty, destination becomes occupied."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "from_i": {"type": "integer", "description": "Source column index."},
+                "from_j": {"type": "integer", "description": "Source row index."},
+                "to_i":   {"type": "integer", "description": "Destination column index."},
+                "to_j":   {"type": "integer", "description": "Destination row index."},
+                "grip_style": {
+                    "type": "string",
+                    "enum": ["face", "edge"],
+                    "description": "Grip style to use for this block.",
+                },
+            },
+            "required": ["from_i", "from_j", "to_i", "to_j", "grip_style"],
+        },
+    },
+    {
         "name": "find_empty_cell",
         "description": (
             "Return the (i, j) coordinates of the next unoccupied grid cell. "
@@ -584,6 +607,49 @@ def _tool_move_to_named_up(
     return f"moved to {pos_name} up" if ok else f"IK failed — {pos_name} up unreachable"
 
 
+def _tool_move_block_in_grid(
+    from_i: int, from_j: int,
+    to_i: int, to_j: int,
+    grip_style: str,
+    ctrl: Any, arm: Any, gripper: Any,
+    grid_map: dict,
+    grid_nx: int, grid_ny: int,
+    grid_z: float,
+    duration: float,
+) -> str:
+    if (from_i, from_j) not in grid_map:
+        return f"error: source ({from_i},{from_j}) out of range — grid is {grid_nx}×{grid_ny}"
+    if (to_i, to_j) not in grid_map:
+        return f"error: destination ({to_i},{to_j}) out of range — grid is {grid_nx}×{grid_ny}"
+    if (from_i, from_j) == (to_i, to_j):
+        return "error: source and destination are the same cell"
+
+    sx, sy = grid_map[(from_i, from_j)]
+    tx, ty = grid_map[(to_i, to_j)]
+
+    if not _ik_move(ctrl, sx, sy, _Z_UP,
+                    roll=0.0, pitch=math.pi / 2, yaw=0.0,
+                    duration=duration, label=f"src({from_i},{from_j})"):
+        return f"IK failed — source ({from_i},{from_j}) unreachable"
+
+    if grip_style == "edge":
+        grab_edge(ctrl, arm, gripper, duration=duration)
+    else:
+        grab_face(ctrl, arm, gripper, duration=duration)
+
+    if not _ik_move(ctrl, tx, ty, _Z_UP,
+                    roll=0.0, pitch=math.pi / 2, yaw=0.0,
+                    duration=duration, label=f"dst({to_i},{to_j})"):
+        return f"IK failed — destination ({to_i},{to_j}) unreachable (block still held)"
+
+    if grip_style == "edge":
+        drop_edge(ctrl, arm, gripper, duration=duration)
+    else:
+        drop_face(ctrl, arm, gripper, duration=duration)
+
+    return f"moved block from ({from_i},{from_j}) to ({to_i},{to_j})"
+
+
 def _tool_home(ctrl: Any, arm: Any, lookup: dict, duration: float) -> str:
     _, entry = lookup[_HOME_LABEL.lower()]
     q_target = np.array(entry["joints_rad"], dtype=np.float64)
@@ -622,6 +688,13 @@ def dispatch_tool(
     if name == "drop_block":
         return _tool_drop_block(
             tool_input.get("grip_style", "face"), ctrl, arm, gripper, duration
+        )
+    if name == "move_block_in_grid":
+        return _tool_move_block_in_grid(
+            int(tool_input["from_i"]), int(tool_input["from_j"]),
+            int(tool_input["to_i"]),   int(tool_input["to_j"]),
+            tool_input.get("grip_style", "edge"),
+            ctrl, arm, gripper, grid_map, grid_nx, grid_ny, grid_z, duration,
         )
     if name == "home":
         return _tool_home(ctrl, arm, lookup, duration)

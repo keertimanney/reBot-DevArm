@@ -66,6 +66,7 @@ Tools and when to call them, these are internal tools to interact with the syste
   find_empty_cell                — use to get the next unoccupied grid cell (i, j)
   move_to_grid_cell  i  j        — use to move above a grid cell before dropping
   drop_block  grip_style         — use to release a block; marks that cell occupied
+  move_block_in_grid from_i from_j to_i to_j grip_style — move a block between two grid cells in one step
   reset_occupancy                — use when starting fresh or clearing the scene
   move_to_named_position_up name — use to transit above any other named position
 
@@ -113,6 +114,10 @@ class OccupancyGrid:
         self._cells.add((i, j))
         self._save()
 
+    def mark_empty(self, i: int, j: int) -> None:
+        self._cells.discard((i, j))
+        self._save()
+
     def next_empty(self) -> tuple[int, int] | None:
         for j in range(self.ny):
             for i in range(self.nx):
@@ -156,6 +161,7 @@ class GraspExecutor(ABC):
     def __init__(self) -> None:
         self._occupancy: OccupancyGrid | None = None
         self._pending_cell: tuple[int, int] | None = None
+        self._pending_move_src: tuple[int, int] | None = None
 
     @abstractmethod
     def execute_tool(self, name: str, tool_input: dict) -> str: ...
@@ -183,6 +189,18 @@ class GraspExecutor(ABC):
                 hint = f" Try i={alt[0]} j={alt[1]}." if alt else " No empty cells remain."
                 return f"error: cell ({i},{j}) is already occupied.{hint}"
             self._pending_cell = (i, j)
+        if name == "move_block_in_grid" and occ is not None:
+            try:
+                to_i, to_j   = int(tool_input["to_i"]),   int(tool_input["to_j"])
+                from_i, from_j = int(tool_input["from_i"]), int(tool_input["from_j"])
+            except (KeyError, ValueError):
+                return None
+            if occ.is_occupied(to_i, to_j):
+                alt = occ.next_empty()
+                hint = f" Try i={alt[0]} j={alt[1]}." if alt else " No empty cells remain."
+                return f"error: destination ({to_i},{to_j}) is already occupied.{hint}"
+            self._pending_cell     = (to_i, to_j)
+            self._pending_move_src = (from_i, from_j)
         return None
 
     def _occupancy_post_drop(self, result: str) -> None:
@@ -190,6 +208,15 @@ class GraspExecutor(ABC):
         if self._occupancy and self._pending_cell and not result.startswith("error"):
             self._occupancy.mark_occupied(*self._pending_cell)
             self._pending_cell = None
+
+    def _occupancy_post_move_block(self, result: str) -> None:
+        """After move_block_in_grid: mark destination occupied, source empty."""
+        if self._occupancy and self._pending_cell and self._pending_move_src \
+                and not result.startswith("error"):
+            self._occupancy.mark_occupied(*self._pending_cell)
+            self._occupancy.mark_empty(*self._pending_move_src)
+        self._pending_cell     = None
+        self._pending_move_src = None
 
     def info(self) -> str:
         return ""
@@ -211,6 +238,8 @@ class DryRunGraspExecutor(GraspExecutor):
         result = f"dry-run: {name}({args_str})"
         if name == "drop_block":
             self._occupancy_post_drop(result)
+        elif name == "move_block_in_grid":
+            self._occupancy_post_move_block(result)
         return result
 
     def info(self) -> str:
@@ -317,6 +346,8 @@ class ReBotGraspExecutor(GraspExecutor):
         )
         if name == "drop_block":
             self._occupancy_post_drop(result)
+        elif name == "move_block_in_grid":
+            self._occupancy_post_move_block(result)
         return result
 
     def info(self) -> str:
