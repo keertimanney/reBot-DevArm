@@ -13,13 +13,13 @@
 # Replace the placeholder [x, y] values with your actual robot-frame coords (metres).
 
 corners:
-  C1: [0.10, -0.20]   # column=0,    row=0      (near-left)
-  C2: [0.10,  0.20]   # column=nx-1, row=0      (near-right)
-  C3: [0.30,  0.20]   # column=nx-1, row=ny-1   (far-right)
-  C4: [0.30, -0.20]   # column=0,    row=ny-1   (far-left)
+  C1: [0.15, -0.175]   # column=0,    row=0      (near-left)
+  C2: [0.15,  0.175]   # column=nx-1, row=0      (near-right)
+  C3: [0.35,  0.175]   # column=nx-1, row=ny-1   (far-right)
+  C4: [0.35, -0.175]   # column=0,    row=ny-1   (far-left)
 
 grid:
-  nx: 8   # number of columns  (i = 0 .. 7)
+  nx: 7   # number of columns  (i = 0 .. 6)
   ny: 4   # number of rows     (j = 0 .. 3)
 
 z_height: 0.10   # metres — Z used for all grid moves
