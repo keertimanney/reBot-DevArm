@@ -1,0 +1,34 @@
+# Camera intrinsics and extrinsics.
+# This file is OVERWRITTEN by the calibration scripts. The values below are
+# placeholders so the pipeline can be imported and unit-tested without a real
+# calibration. DO NOT trust these for actual robot operation.
+
+# --- Top camera (fixed) ---
+K_top:
+  - [800.0,   0.0, 640.0]
+  - [  0.0, 800.0, 360.0]
+  - [  0.0,   0.0,   1.0]
+dist_top: [0.0, 0.0, 0.0, 0.0, 0.0]
+
+# T_base_top: pose of the top camera optical frame in robot base frame.
+# Convention: camera optical frame is +Z forward (out of lens), +X right, +Y down.
+T_base_top:
+  - [ 1.0,  0.0,  0.0, 0.30]
+  - [ 0.0, -1.0,  0.0, 0.00]
+  - [ 0.0,  0.0, -1.0, 0.60]
+  - [ 0.0,  0.0,  0.0, 1.00]
+
+# --- Wrist camera (mounted on gripper) ---
+K_wrist:
+  - [800.0,   0.0, 640.0]
+  - [  0.0, 800.0, 360.0]
+  - [  0.0,   0.0,   1.0]
+dist_wrist: [0.0, 0.0, 0.0, 0.0, 0.0]
+
+# T_tool_wrist: pose of the wrist camera optical frame in tool flange frame.
+# Placeholder assumes camera ~5cm in front of flange, looking forward-down ~30°.
+T_tool_wrist:
+  - [ 1.0,       0.0,      0.0,     0.00]
+  - [ 0.0,  0.866025, -0.50000,     0.00]
+  - [ 0.0,  0.500000,  0.86603,     0.05]
+  - [ 0.0,       0.0,      0.0,     1.00]

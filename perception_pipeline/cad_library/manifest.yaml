@@ -1,0 +1,41 @@
+# CAD library manifest.
+# Add one entry per block type. `cad_id` is what the reasoning agent and the
+# pose pipeline use to refer to the object.
+
+blocks:
+  - cad_id: brick_2x4_red
+    mesh: meshes/brick_2x4.obj           # path relative to this manifest
+    color: red
+    symmetry: z2                          # 180° rotation about local Z is identity
+    grasp_sites:
+      - name: top_center
+        # Grasp pose in the object's local frame. Z axis points along approach.
+        pose:
+          - [1, 0, 0, 0.000]
+          - [0, 1, 0, 0.000]
+          - [0, 0, 1, 0.012]
+          - [0, 0, 0, 1.000]
+
+  - cad_id: brick_2x4_blue
+    mesh: meshes/brick_2x4.obj
+    color: blue
+    symmetry: z2
+    grasp_sites:
+      - name: top_center
+        pose:
+          - [1, 0, 0, 0.000]
+          - [0, 1, 0, 0.000]
+          - [0, 0, 1, 0.012]
+          - [0, 0, 0, 1.000]
+
+  - cad_id: brick_2x2_red
+    mesh: meshes/brick_2x2.obj
+    color: red
+    symmetry: z4                          # 90° rotational symmetry
+    grasp_sites:
+      - name: top_center
+        pose:
+          - [1, 0, 0, 0.000]
+          - [0, 1, 0, 0.000]
+          - [0, 0, 1, 0.012]
+          - [0, 0, 0, 1.000]
