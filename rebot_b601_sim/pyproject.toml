@@ -28,6 +28,7 @@ rebot-b601-leader-sim = "rebot_b601_sim.leader_to_sim:main"
 rebot-b601-mujoco = "rebot_b601_sim.mujoco_sim:main"
 rebot-b601-leader-mujoco = "rebot_b601_sim.leader_to_mujoco:main"
 rebot-b601-setup-sim = "rebot_b601_sim.setup_simulation:main"
+rebot-b601-move = "rebot_b601_sim.move_robot:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
