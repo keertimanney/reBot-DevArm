@@ -99,13 +99,17 @@ def _make_gripper_handle(arm: Any) -> Any:
         return None
 
 
-def _live_capture(arm: Any, label: str, settle: float, gripper: Any = None) -> None:
-    """Stream live joint angles (and gripper position) until the user presses Enter."""
+def _live_capture(arm: Any, label: str, settle: float, joint_to_pose: Any = None, gripper: Any = None) -> None:
+    """Stream live joint angles, xyz pose, and gripper position until the user presses Enter."""
     print(f"  Move arm to '{label}' — press Enter to capture.")
     while True:
         q = arm.get_positions(request=True)
-        deg = [f"{v:+6.1f}" for v in np.degrees(np.asarray(q, dtype=np.float64))]
+        q_arr = np.asarray(q, dtype=np.float64)
+        deg = [f"{v:+6.1f}" for v in np.degrees(q_arr)]
         line = f"\r  joints_deg: [{', '.join(deg)}]"
+        if joint_to_pose is not None:
+            pos, _ = joint_to_pose(q_arr)
+            line += f"  xyz: ({pos[0]:+.4f}, {pos[1]:+.4f}, {pos[2]:+.4f}) m"
         if gripper is not None:
             g_rad = gripper.get_position(request=True)
             line += f"  gripper: {g_rad:+.4f} rad"
@@ -195,7 +199,7 @@ def main() -> int:
                     continue
                 break
 
-            _live_capture(arm, label, args.settle, gripper=gripper)
+            _live_capture(arm, label, args.settle, joint_to_pose=joint_to_pose, gripper=gripper)
             record = read_pose(arm, joint_to_pose, gripper=gripper)
             records[label] = record
 

@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """Voice-controlled arm agent using the OpenAI Realtime API.
 
-Positions and motion parameters are loaded from realtime_positions.yaml.
-The agent listens continuously (semantic VAD) and moves the arm on voice command.
+Positions are loaded from recorded_arm_positions.yaml; grid from grid_config.yaml.
+The agent listens continuously (semantic VAD) and executes arm tool calls on voice command.
+
+Available tools: move_to_pickup_zone, grab_block, move_to_grid_cell, drop_block,
+move_to_named_position_up.
 
 Setup:
     export OPENAI_API_KEY=sk-...
@@ -11,7 +14,8 @@ Usage:
     python run_voice_agent.py                        # real hardware
     python run_voice_agent.py --dry-run              # no hardware
     python run_voice_agent.py --verbose              # print raw events
-    python run_voice_agent.py --positions-file realtime_positions.yaml
+    python run_voice_agent.py --positions-file recorded_arm_positions.yaml
+    python run_voice_agent.py --grid-file grid_config.yaml
 """
 
 from __future__ import annotations
@@ -25,9 +29,10 @@ import signal
 import sys
 import threading
 import time
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+from abc import ABC, abstractmethod
 
 import numpy as np
 import sounddevice as sd
@@ -35,315 +40,180 @@ import websocket
 import yaml
 
 
-REALTIME_URL = "wss://api.openai.com/v1/realtime"
-DEFAULT_MODEL = "gpt-realtime-2"
-SAMPLE_RATE = 24_000
-DEFAULT_POSITIONS_FILE = "realtime_positions.yaml"
+_REPO_ROOT = Path(__file__).resolve().parent
+
+REALTIME_URL           = "wss://api.openai.com/v1/realtime"
+DEFAULT_MODEL          = "gpt-realtime"
+SAMPLE_RATE            = 24_000
+DEFAULT_POSITIONS_FILE = "recorded_arm_positions.yaml"
+DEFAULT_GRID_FILE      = "grid_config.yaml"
 
 INSTRUCTIONS = """
-You are a voice-controlled local robot arm assistant.
+You are a voice-controlled robot arm assistant.
 
-The robot has a set of calibrated positions. Position names are the only
-valid source and destination values.
+You have exactly five tools. Whenever the user asks you to move, pick up, place, or
+manipulate the arm or a block, call the appropriate tool immediately — do not just
+describe what you would do.
 
-Your only tool is move_object. Use it whenever the user asks to move the object
-or block from one named position to another. If the user says "position A",
-use "A"; if they say "position B", use "B"; and so on.
+Tools and when to call them:
+  home                           — use when user says reset, go home, or return to zero
+  move_to_pickup_zone            — use to go above position A before grabbing
+  grab_block  grip_style         — use to grab a block (face=flat, edge=upright)
+  move_to_grid_cell  i  j        — use to move above a grid cell before dropping
+  drop_block  grip_style         — use to release a block at current position
+  move_to_named_position_up name — use to transit above any other named position
 
-After calling the tool, briefly tell the user what happened.
-If either position is missing or unclear, ask one short clarification question.
-Do not call any tool other than move_object.
+Standard pick-and-place order: move_to_pickup_zone → grab_block → move_to_grid_cell → drop_block.
+After each tool call, briefly say what happened.
+If a grid cell or position is unclear, ask one short clarification question.
+Do not call any tool not listed above.
 """
 
 
-# ── data classes ───────────────────────────────────────────────────────────────
+# ── schema conversion ──────────────────────────────────────────────────────────
 
-@dataclass(frozen=True)
-class CalibratedPosition:
-    name: str
-    x: float
-    y: float
-    z: float
-    yaw: float = 0.0
-
-
-@dataclass(frozen=True)
-class MotionConfig:
-    positions: dict[str, CalibratedPosition]
-    roll: float = 0.0
-    pitch: float = 1.5707963267948966   # π/2 — EEF pointing down
-    duration: float = 2.0
-    approach_height: float = 0.05
-    clearance_z: float = 0.18
-
-    @property
-    def position_names(self) -> list[str]:
-        return list(self.positions.keys())
-
-    def resolve(self, value: str) -> str | None:
-        cleaned = value.strip()
-        if cleaned in self.positions:
-            return cleaned
-        lower_map = {name.lower(): name for name in self.positions}
-        return lower_map.get(cleaned.lower())
-
-
-# ── config loader ──────────────────────────────────────────────────────────────
-
-def load_motion_config(path: str | Path) -> MotionConfig:
-    with open(path, "r", encoding="utf-8") as f:
-        data = yaml.safe_load(f) or {}
-
-    raw_positions = data.get("positions") or {}
-    if not isinstance(raw_positions, dict) or not raw_positions:
-        raise ValueError(f"{path} must define a non-empty 'positions' mapping")
-
-    positions: dict[str, CalibratedPosition] = {}
-    for name, raw in raw_positions.items():
-        if not isinstance(raw, dict):
-            raise ValueError(f"Position {name!r} must be a mapping")
-        xyz = raw.get("xyz")
-        if not isinstance(xyz, list) or len(xyz) != 3:
-            raise ValueError(f"Position {name!r} must define xyz: [x, y, z]")
-        positions[str(name)] = CalibratedPosition(
-            name=str(name),
-            x=float(xyz[0]),
-            y=float(xyz[1]),
-            z=float(xyz[2]),
-            yaw=float(raw.get("yaw", 0.0)),
-        )
-
-    motion = data.get("motion") or {}
-    return MotionConfig(
-        positions=positions,
-        roll=float(motion.get("roll", 0.0)),
-        pitch=float(motion.get("pitch", 1.5707963267948966)),
-        duration=float(motion.get("duration", 2.0)),
-        approach_height=float(motion.get("approach_height", 0.05)),
-        clearance_z=float(motion.get("clearance_z", 0.18)),
-    )
+def _to_openai_tools(agent_tools: list[dict]) -> list[dict]:
+    """Convert Anthropic-format tool list to OpenAI Realtime API tool format."""
+    result = []
+    for t in agent_tools:
+        params = {**t["input_schema"], "additionalProperties": False}
+        result.append({
+            "type": "function",
+            "name": t["name"],
+            "description": t["description"],
+            "parameters": params,
+        })
+    return result
 
 
 # ── executors ──────────────────────────────────────────────────────────────────
 
-class ObjectMotionExecutor:
-    def move_object(self, from_position: str, to_position: str) -> dict[str, Any]:  # noqa: ARG002
-        raise NotImplementedError
+class GraspExecutor(ABC):
+    @abstractmethod
+    def execute_tool(self, name: str, tool_input: dict) -> str: ...
+
+    def info(self) -> str:
+        return ""
 
     def close(self) -> None:
         pass
 
 
-class DryRunObjectMotionExecutor(ObjectMotionExecutor):
-    def __init__(self, config: MotionConfig) -> None:
-        self.config = config
+class DryRunGraspExecutor(GraspExecutor):
+    def execute_tool(self, name: str, tool_input: dict) -> str:
+        args_str = ", ".join(f"{k}={v!r}" for k, v in tool_input.items())
+        return f"dry-run: {name}({args_str})"
 
-    def move_object(self, from_position: str, to_position: str) -> dict[str, Any]:
-        resolved_from = self.config.resolve(from_position)
-        resolved_to   = self.config.resolve(to_position)
-        err = _validate_positions(self.config, resolved_from, resolved_to, from_position, to_position)
-        if err:
-            return err
-        assert resolved_from and resolved_to
-        return {
-            "success": True,
-            "message": f"Dry run: would move from {resolved_from} to {resolved_to}.",
-            "from_position": resolved_from,
-            "to_position": resolved_to,
-            "dry_run": True,
-        }
+    def info(self) -> str:
+        return "Backend: dry-run (no hardware)"
 
 
-class ReBotIKObjectMotionExecutor(ObjectMotionExecutor):
-    """Executes moves via ArmEndPos.move_to_traj (IK from xyz)."""
-
+class ReBotGraspExecutor(GraspExecutor):
     def __init__(
         self,
-        config: MotionConfig,
-        repo_root: Path,
-        arm_config: str | None = None,
+        positions_file: Path,
+        grid_file: Path,
+        arm_config: str | None,
+        duration: float,
     ) -> None:
-        self.config = config
-        self.repo_root = repo_root
-        self.arm_config = arm_config
-        self._controller: Any | None = None
-        self._ensure_controller()   # connect and home on startup
+        sys.path.insert(0, str(_REPO_ROOT))
+        sys.path.insert(0, str(_REPO_ROOT / "reBotArm_control_py"))
 
-    def move_object(self, from_position: str, to_position: str) -> dict[str, Any]:
-        resolved_from = self.config.resolve(from_position)
-        resolved_to   = self.config.resolve(to_position)
-        err = _validate_positions(self.config, resolved_from, resolved_to, from_position, to_position)
-        if err:
-            return err
-        assert resolved_from and resolved_to
-
-        if resolved_from == resolved_to:
-            return {
-                "success": True,
-                "message": "Source and destination are the same — no movement needed.",
-                "from_position": resolved_from,
-                "to_position": resolved_to,
-            }
-
-        source = self.config.positions[resolved_from]
-        target = self.config.positions[resolved_to]
-
-        try:
-            ctrl = self._ensure_controller()
-            for wp in self._build_waypoints(source, target):
-                ok = ctrl.move_to_traj(
-                    x=wp.x, y=wp.y, z=wp.z,
-                    roll=self.config.roll,
-                    pitch=self.config.pitch,
-                    yaw=wp.yaw,
-                    duration=self.config.duration,
-                )
-                if not ok:
-                    return {
-                        "success": False,
-                        "message": f"IK failed at waypoint '{wp.name}'.",
-                        "from_position": resolved_from,
-                        "to_position": resolved_to,
-                    }
-                self._wait_for_motion(ctrl)
-        except Exception as exc:
-            return {
-                "success": False,
-                "message": f"Motion failed: {exc}",
-                "from_position": resolved_from,
-                "to_position": resolved_to,
-            }
-
-        return {
-            "success": True,
-            "message": f"Moved from {resolved_from} to {resolved_to}.",
-            "from_position": resolved_from,
-            "to_position": resolved_to,
-        }
-
-    def close(self) -> None:
-        if self._controller is not None:
-            self._controller.end()
-            self._controller = None
-
-    def _ensure_controller(self) -> Any:
-        if self._controller is not None:
-            return self._controller
-
-        sys.path.insert(0, str(self.repo_root / "reBotArm_control_py"))
+        from move_repl_xy import (
+            dispatch_tool,
+            _make_gripper_handle, _move_joints,
+            _MIN_DURATION, _DEFAULT_SPEED, _HOME_LABEL, _JOINT_LABELS,
+            zero_gripper,
+        )
         from reBotArm_control_py.actuator import RobotArm
         from reBotArm_control_py.controllers import ArmEndPos
+        from compute_grid import compute_grid_map
 
-        arm = RobotArm(cfg_path=self.arm_config)
-        ctrl = ArmEndPos(arm)
-        ctrl.start()
-        print("Moving to zero_act (home) …")
-        self._go_to_zero(ctrl, arm)
+        self._dispatch      = dispatch_tool
+        self._move_joints   = _move_joints
+        self._JOINT_LABELS  = _JOINT_LABELS
+        self.duration       = duration
+
+        # Load positions
+        data = yaml.safe_load(positions_file.read_text()) or {}
+        raw  = data.get("positions") or {}
+        if not raw:
+            raise ValueError(f"No 'positions' found in {positions_file}")
+        if _HOME_LABEL not in raw:
+            raise ValueError(f"'{_HOME_LABEL}' not in {positions_file}")
+        self._raw  = raw
+        self.lookup = {name.lower(): (name, entry) for name, entry in raw.items()}
+
+        # Load grid
+        self.grid_map: dict[tuple[int, int], tuple[float, float]] = {}
+        self.grid_z  = 0.15
+        self.grid_nx = self.grid_ny = 0
+        if grid_file.exists():
+            self.grid_map, self.grid_z = compute_grid_map(grid_file)
+            gcfg = yaml.safe_load(grid_file.read_text())
+            self.grid_nx = gcfg["grid"]["nx"]
+            self.grid_ny = gcfg["grid"]["ny"]
+
+        # Initialise hardware
+        self.arm     = RobotArm(cfg_path=arm_config)
+        self.ctrl    = ArmEndPos(self.arm)
+        self.gripper = _make_gripper_handle(self.arm)
+
+        # Clear any latched motor errors before enabling (mirrors gripper start())
+        print("Clearing motor errors …")
+        for _ctrl in self.arm._ctrl_map.values():
+            for _mot in getattr(_ctrl, '_motor_map', {}).values():
+                try:
+                    _mot.clear_error()
+                except Exception:
+                    pass
+        time.sleep(0.2)
+
+        print("Connecting and enabling motors …")
+        self.ctrl.start()
+        if self.gripper is not None:
+            self.gripper.start()
+            print("Zeroing gripper …")
+            zero_gripper(self.gripper)
+
+        q_home       = np.array(raw[_HOME_LABEL]["joints_rad"], dtype=np.float64)
+        q_now, _, _  = self.arm.get_state()
+        home_dur     = max(_MIN_DURATION, float(np.max(np.abs(q_home - q_now))) / _DEFAULT_SPEED)
+        print(f"Moving to '{_HOME_LABEL}' ({home_dur:.1f}s) …")
+        _move_joints(self.ctrl, self.arm, q_home, home_dur)
+        self._q_home   = q_home
+        self._home_dur = home_dur
         print("At home. Ready.")
-        self._controller = ctrl
-        return ctrl
 
-    @staticmethod
-    def _go_to_zero(ctrl: Any, arm: Any) -> None:
-        """Drive all joints to 0 rad via a min-jerk trajectory.
+    def execute_tool(self, name: str, tool_input: dict) -> str:
+        return self._dispatch(
+            name, tool_input,
+            ctrl=self.ctrl,
+            arm=self.arm,
+            gripper=self.gripper,
+            grid_map=self.grid_map,
+            grid_nx=self.grid_nx,
+            grid_ny=self.grid_ny,
+            grid_z=self.grid_z,
+            lookup=self.lookup,
+            duration=self.duration,
+        )
 
-        Uses the same approach as replay_arm_positions._move_joints so the
-        full trajectory is played out regardless of motor feedback state.
-        """
-        q_start, _, _ = arm.get_state()
-        q_target = np.zeros(arm.num_joints)
+    def info(self) -> str:
+        pos_names = [n for n in self._raw if n.lower() not in self._JOINT_LABELS]
+        grid_info = (
+            f"grid {self.grid_nx}×{self.grid_ny}" if self.grid_nx > 0 else "no grid loaded"
+        )
+        return f"positions: {', '.join(pos_names)}  |  {grid_info}"
 
-        # Auto-duration: allow 0.5 rad/s max joint speed, minimum 2 s.
-        max_delta = float(np.max(np.abs(q_start - q_target)))
-        duration = max(2.0, max_delta / 0.5)
-
-        n = max(2, int(duration / 0.02))
-        done = threading.Event()
-
-        def _send() -> None:
-            interval = duration / n
-            for i in range(n):
-                if ctrl._stop_send.is_set():
-                    break
-                tau = i / (n - 1)
-                s = 10*tau**3 - 15*tau**4 + 6*tau**5
-                ctrl._q_target[:] = q_start + s * (q_target - q_start)
-                time.sleep(interval)
-            ctrl._q_target[:] = q_target
-            done.set()
-
-        t = threading.Thread(target=_send, daemon=True)
-        ctrl._send_thread = t
-        t.start()
-        done.wait(timeout=duration + 3.0)
-
-    def _build_waypoints(
-        self,
-        source: CalibratedPosition,
-        target: CalibratedPosition,
-    ) -> list[CalibratedPosition]:
-        src_z = max(source.z + self.config.approach_height, self.config.clearance_z)
-        tgt_z = max(target.z + self.config.approach_height, self.config.clearance_z)
-        return [
-            CalibratedPosition(f"{source.name}_approach", source.x, source.y, src_z, source.yaw),
-            source,
-            CalibratedPosition(f"{source.name}_retreat",  source.x, source.y, src_z, source.yaw),
-            CalibratedPosition(f"{target.name}_approach", target.x, target.y, tgt_z, target.yaw),
-            target,
-            CalibratedPosition(f"{target.name}_retreat",  target.x, target.y, tgt_z, target.yaw),
-        ]
-
-    def _wait_for_motion(self, ctrl: Any) -> None:
-        deadline = time.monotonic() + max(5.0, self.config.duration + 5.0)
-        while getattr(ctrl, "_moving", False):
-            if time.monotonic() > deadline:
-                raise TimeoutError("Timed out waiting for trajectory to finish")
-            time.sleep(0.05)
-
-
-# ── helpers ────────────────────────────────────────────────────────────────────
-
-def _validate_positions(
-    config: MotionConfig,
-    resolved_from: str | None,
-    resolved_to:   str | None,
-    raw_from: str,
-    raw_to:   str,
-) -> dict[str, Any] | None:
-    if resolved_from is None:
-        return {"success": False, "message": f"Unknown source position: {raw_from}",
-                "valid_positions": config.position_names}
-    if resolved_to is None:
-        return {"success": False, "message": f"Unknown destination position: {raw_to}",
-                "valid_positions": config.position_names}
-    return None
-
-
-def _tool_schema(position_names: list[str]) -> list[dict[str, Any]]:
-    return [
-        {
-            "type": "function",
-            "name": "move_object",
-            "description": "Move the object from one calibrated table position to another.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "from_position": {
-                        "type": "string",
-                        "description": "The source position where the object currently is.",
-                        "enum": position_names,
-                    },
-                    "to_position": {
-                        "type": "string",
-                        "description": "The destination position for the object.",
-                        "enum": position_names,
-                    },
-                },
-                "required": ["from_position", "to_position"],
-                "additionalProperties": False,
-            },
-        }
-    ]
+    def close(self) -> None:
+        try:
+            self._move_joints(self.ctrl, self.arm, self._q_home, self._home_dur)
+        except Exception:
+            pass
+        self.ctrl.end()
+        if self.gripper is not None:
+            self.gripper.disconnect()
 
 
 # ── realtime loop ──────────────────────────────────────────────────────────────
@@ -355,19 +225,22 @@ class RealtimeVoiceToolLoop:
         model: str,
         voice: str,
         verbose: bool,
-        motion_config: MotionConfig,
-        executor: ObjectMotionExecutor,
+        executor: GraspExecutor,
+        openai_tools: list[dict],
+        context_info: str,
     ) -> None:
-        self.api_key = api_key
-        self.model = model
-        self.voice = voice
-        self.verbose = verbose
-        self.motion_config = motion_config
-        self.executor = executor
+        self.api_key      = api_key
+        self.model        = model
+        self.voice        = voice
+        self.verbose      = verbose
+        self.executor     = executor
+        self.openai_tools = openai_tools
+        self.context_info = context_info
         self.ws: websocket.WebSocket | None = None
-        self.stop_event = threading.Event()
+        self.stop_event   = threading.Event()
         self.audio_queue: queue.Queue[bytes] = queue.Queue(maxsize=100)
-        self._playback_buf = bytearray()
+        self._dispatched_calls: set[str] = set()   # dedup tool calls across events
+        self._playback_buf  = bytearray()
         self._playback_lock = threading.Lock()
         self._input_stream:  sd.RawInputStream  | None = None
         self._output_stream: sd.RawOutputStream | None = None
@@ -375,7 +248,6 @@ class RealtimeVoiceToolLoop:
     def _output_callback(
         self, outdata: bytes, _frames: int, _time: Any, _status: sd.CallbackFlags
     ) -> None:
-        """Called by sounddevice to fill each output block from the playback buffer."""
         n = len(outdata)
         with self._playback_lock:
             available = len(self._playback_buf)
@@ -391,31 +263,25 @@ class RealtimeVoiceToolLoop:
         self._connect()
 
         self._input_stream = sd.RawInputStream(
-            samplerate=SAMPLE_RATE,
-            channels=1,
-            dtype="int16",
-            blocksize=1200,
-            callback=self._on_input_audio,
+            samplerate=SAMPLE_RATE, channels=1, dtype="int16",
+            blocksize=1200, callback=self._on_input_audio,
         )
         self._output_stream = sd.RawOutputStream(
-            samplerate=SAMPLE_RATE,
-            channels=1,
-            dtype="int16",
-            blocksize=1200,
-            callback=self._output_callback,
+            samplerate=SAMPLE_RATE, channels=1, dtype="int16",
+            blocksize=1200, callback=self._output_callback,
         )
 
         try:
             self._input_stream.start()
             self._output_stream.start()
 
-            sender   = threading.Thread(target=self._send_audio_loop,  daemon=True)
-            receiver = threading.Thread(target=self._receive_loop,      daemon=True)
+            sender   = threading.Thread(target=self._send_audio_loop, daemon=True)
+            receiver = threading.Thread(target=self._receive_loop,    daemon=True)
             sender.start()
             receiver.start()
 
-            print(f"Positions: {', '.join(self.motion_config.position_names)}")
-            print("Speak into your microphone. Try: 'move the object from A to B'")
+            print(self.context_info)
+            print("Speak into your microphone. Try: 'pick up the block from A and place it in grid cell 0 0'")
             print("Press Ctrl+C to stop.\n")
 
             while not self.stop_event.wait(0.2):
@@ -442,7 +308,7 @@ class RealtimeVoiceToolLoop:
                     stream.close()
                 except Exception:
                     pass
-        self._input_stream = None
+        self._input_stream  = None
         self._output_stream = None
 
     # ── connection ─────────────────────────────────────────────────────────────
@@ -460,11 +326,7 @@ class RealtimeVoiceToolLoop:
                 "type": "realtime",
                 "model": self.model,
                 "output_modalities": ["audio"],
-                "instructions": (
-                    INSTRUCTIONS.strip()
-                    + "\n\nValid position names: "
-                    + ", ".join(self.motion_config.position_names) + "."
-                ),
+                "instructions": INSTRUCTIONS.strip() + "\n\n" + self.context_info,
                 "audio": {
                     "input": {
                         "format": {"type": "audio/pcm", "rate": SAMPLE_RATE},
@@ -475,7 +337,7 @@ class RealtimeVoiceToolLoop:
                         "voice": self.voice,
                     },
                 },
-                "tools": _tool_schema(self.motion_config.position_names),
+                "tools": self.openai_tools,
                 "tool_choice": "auto",
             },
         })
@@ -517,7 +379,6 @@ class RealtimeVoiceToolLoop:
                 return
 
     def _collect_audio_delta(self, encoded: str) -> None:
-        """Append a decoded audio chunk directly into the playback buffer."""
         if encoded:
             with self._playback_lock:
                 self._playback_buf.extend(base64.b64decode(encoded))
@@ -553,23 +414,29 @@ class RealtimeVoiceToolLoop:
                     print(f"[you]   {transcript}")
 
             elif etype == "input_audio_buffer.speech_started":
-                # Barge-in: clear playback buffer so agent stops speaking immediately
                 with self._playback_lock:
                     self._playback_buf.clear()
+                self._dispatched_calls.clear()
 
             elif etype == "response.output_item.done":
-                item = event.get("item", {})
+                item  = event.get("item", {})
                 itype = item.get("type")
-                print(f"[item]  type={itype!r}  name={item.get('name')!r}")
                 if itype == "function_call":
+                    print(f"[tool-call]  name={item.get('name')!r}  args={item.get('arguments')!r}")
                     self._dispatch_tool_call(item)
+                elif self.verbose:
+                    print(f"[item]  type={itype!r}  name={item.get('name')!r}")
 
             elif etype == "response.done":
-                # Safety net: also check response.output in case items weren't
-                # delivered via response.output_item.done.
-                for item in event.get("response", {}).get("output", []):
+                output = event.get("response", {}).get("output", [])
+                for item in output:
                     if item.get("type") == "function_call":
                         self._dispatch_tool_call(item)
+                if self.verbose:
+                    print(f"[response.done]  {len(output)} output item(s)")
+
+            elif etype == "response.function_call_arguments.done":
+                print(f"[args-done]  name={event.get('name')!r}  args={event.get('arguments')!r}")
 
             elif etype == "error":
                 print(
@@ -583,21 +450,20 @@ class RealtimeVoiceToolLoop:
     def _dispatch_tool_call(self, item: dict[str, Any]) -> None:
         name    = item.get("name", "")
         call_id = item.get("call_id", "")
+        if call_id in self._dispatched_calls:
+            return
+        self._dispatched_calls.add(call_id)
         try:
             args = json.loads(item.get("arguments") or "{}")
         except json.JSONDecodeError as exc:
-            result: dict[str, Any] = {"success": False, "message": f"Bad JSON args: {exc}"}
+            result_str = f"error: bad JSON args: {exc}"
         else:
-            if name == "move_object":
-                print(f"[tool] move_object({json.dumps(args, sort_keys=True)})")
-                result = self.executor.move_object(
-                    from_position=str(args.get("from_position", "")),
-                    to_position=str(args.get("to_position", "")),
-                )
-            else:
-                result = {"success": False, "message": f"Unknown tool: {name}"}
+            print(f"[tool→exec]  {name}({json.dumps(args, sort_keys=True)})")
+            result_str = self.executor.execute_tool(name, args)
 
-        print(f"[tool] ← {json.dumps(result, sort_keys=True)}")
+        success = not result_str.startswith("error")
+        result  = {"success": success, "message": result_str}
+        print(f"[tool←result]  {json.dumps(result, sort_keys=True)}")
         self._send({
             "type": "conversation.item.create",
             "item": {
@@ -635,7 +501,7 @@ class RealtimeVoiceToolLoop:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Voice arm agent — OpenAI Realtime API + reBotArm IK motion.",
+        description="Voice arm agent — OpenAI Realtime API + reBotArm grasp tools.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Environment:
@@ -644,15 +510,18 @@ Environment:
 Examples:
   python run_voice_agent.py
   python run_voice_agent.py --dry-run
-  python run_voice_agent.py --positions-file realtime_positions.yaml
+  python run_voice_agent.py --grid-file grid_config.yaml
   python run_voice_agent.py --verbose
         """,
     )
     parser.add_argument("--model",          default=DEFAULT_MODEL)
     parser.add_argument("--voice",          default="marin")
     parser.add_argument("--positions-file", default=DEFAULT_POSITIONS_FILE)
+    parser.add_argument("--grid-file",      default=DEFAULT_GRID_FILE)
     parser.add_argument("--arm-config",     default=None,
                         help="Path to reBotArm arm.yaml (auto-detected when omitted).")
+    parser.add_argument("--duration",       type=float, default=2.0,
+                        help="Default motion duration in seconds.")
     parser.add_argument("--dry-run",        action="store_true",
                         help="No hardware — print tool results only.")
     parser.add_argument("--verbose",        action="store_true")
@@ -663,31 +532,39 @@ Examples:
         print("Set OPENAI_API_KEY before running.", file=sys.stderr)
         return 2
 
-    repo_root     = Path(__file__).resolve().parent
     positions_path = Path(args.positions_file)
     if not positions_path.is_absolute():
-        positions_path = repo_root / positions_path
+        positions_path = _REPO_ROOT / positions_path
 
-    motion_config = load_motion_config(positions_path)
+    grid_path = Path(args.grid_file)
+    if not grid_path.is_absolute():
+        grid_path = _REPO_ROOT / grid_path
+
+    sys.path.insert(0, str(_REPO_ROOT))
+    from move_repl_xy import AGENT_TOOLS  # noqa: PLC0415
+    openai_tools = _to_openai_tools(AGENT_TOOLS)
 
     if args.dry_run:
-        executor: ObjectMotionExecutor = DryRunObjectMotionExecutor(motion_config)
+        executor: GraspExecutor = DryRunGraspExecutor()
         print("Backend: dry-run (no hardware)")
     else:
-        executor = ReBotIKObjectMotionExecutor(
-            config=motion_config,
-            repo_root=repo_root,
+        executor = ReBotGraspExecutor(
+            positions_file=positions_path,
+            grid_file=grid_path,
             arm_config=args.arm_config,
+            duration=args.duration,
         )
-        print("Backend: reBotArm IK (hardware initialises on first move)")
+
+    context_info = executor.info()
 
     loop = RealtimeVoiceToolLoop(
         api_key=api_key,
         model=args.model,
         voice=args.voice,
         verbose=args.verbose,
-        motion_config=motion_config,
         executor=executor,
+        openai_tools=openai_tools,
+        context_info=context_info,
     )
 
     def _handle_signal(signum: int, frame: Any) -> None:

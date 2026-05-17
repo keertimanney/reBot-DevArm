@@ -1,0 +1,25 @@
+# Rectangular grid configuration
+#
+# Corner ordering (viewed from above):
+#
+#   C4 ─────── C3
+#    │           │
+#    │           │
+#   C1 ─────── C2
+#
+# Cell (i, j):  i = column  0 .. nx-1  (C1 → C2 direction)
+#               j = row     0 .. ny-1  (C1 → C4 direction)
+#
+# Replace the placeholder [x, y] values with your actual robot-frame coords (metres).
+
+corners:
+  C1: [0.20, -0.10]   # column=0,    row=0      (near-left)
+  C2: [0.20,  0.10]   # column=nx-1, row=0      (near-right)
+  C3: [0.35,  0.10]   # column=nx-1, row=ny-1   (far-right)
+  C4: [0.35, -0.10]   # column=0,    row=ny-1   (far-left)
+
+grid:
+  nx: 4   # number of columns  (i = 0 .. nx-1)
+  ny: 3   # number of rows     (j = 0 .. ny-1)
+
+z_height: 0.10   # metres — Z used for all grid moves
