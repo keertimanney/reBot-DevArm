@@ -47,23 +47,34 @@ DEFAULT_MODEL          = "gpt-realtime"
 SAMPLE_RATE            = 24_000
 DEFAULT_POSITIONS_FILE = "recorded_arm_positions.yaml"
 DEFAULT_GRID_FILE      = "grid_config.yaml"
+DEFAULT_STATE_FILE     = "grid_occupancy.json"
 
 INSTRUCTIONS = """
-You are a voice-controlled robot arm assistant.
+You are a voice-controlled robot arm that can reconfigure a grid by placing blocks 
+in cells which are picked up from the pickup area A uses edges.
 
-You have exactly five tools. Whenever the user asks you to move, pick up, place, or
+The user will tell what they want or a problem, solve it by making relevant patterns on the grid.
+
+You have tools. Whenever the user asks you to move, pick up, place, or
 manipulate the arm or a block, call the appropriate tool immediately — do not just
 describe what you would do.
 
-Tools and when to call them:
+Tools and when to call them, these are internal tools to interact with the system, dont ask the user:
   home                           — use when user says reset, go home, or return to zero
   move_to_pickup_zone            — use to go above position A before grabbing
   grab_block  grip_style         — use to grab a block (face=flat, edge=upright)
+  find_empty_cell                — use to get the next unoccupied grid cell (i, j)
   move_to_grid_cell  i  j        — use to move above a grid cell before dropping
-  drop_block  grip_style         — use to release a block at current position
+  drop_block  grip_style         — use to release a block; marks that cell occupied
+  reset_occupancy                — use when starting fresh or clearing the scene
   move_to_named_position_up name — use to transit above any other named position
 
-Standard pick-and-place order: move_to_pickup_zone → grab_block → move_to_grid_cell → drop_block.
+Standard pick-and-place order:
+  move_to_pickup_zone → grab_block → find_empty_cell → move_to_grid_cell → drop_block
+
+IMPORTANT: always call find_empty_cell before move_to_grid_cell when placing a block.
+Never place in a cell you haven't confirmed is empty. If move_to_grid_cell returns an
+occupancy error it will tell you the next free cell.
 After each tool call, briefly say what happened.
 If a grid cell or position is unclear, ask one short clarification question.
 Do not call any tool not listed above.
@@ -86,11 +97,99 @@ def _to_openai_tools(agent_tools: list[dict]) -> list[dict]:
     return result
 
 
+# ── occupancy grid ────────────────────────────────────────────────────────────
+
+class OccupancyGrid:
+    def __init__(self, nx: int, ny: int, state_file: Path | None = None) -> None:
+        self.nx         = nx
+        self.ny         = ny
+        self.state_file = state_file
+        self._cells: set[tuple[int, int]] = set()
+
+    def is_occupied(self, i: int, j: int) -> bool:
+        return (i, j) in self._cells
+
+    def mark_occupied(self, i: int, j: int) -> None:
+        self._cells.add((i, j))
+        self._save()
+
+    def next_empty(self) -> tuple[int, int] | None:
+        for j in range(self.ny):
+            for i in range(self.nx):
+                if (i, j) not in self._cells:
+                    return (i, j)
+        return None
+
+    def reset(self) -> None:
+        self._cells.clear()
+        self._save()
+
+    def load(self) -> None:
+        if self.state_file and self.state_file.exists():
+            try:
+                data = json.loads(self.state_file.read_text())
+                self._cells = {(int(c[0]), int(c[1])) for c in data.get("occupied", [])}
+                print(f"[occupancy] loaded from {self.state_file.name}: {self.status()}")
+            except Exception as exc:
+                print(f"[occupancy] load error: {exc}")
+
+    def _save(self) -> None:
+        if self.state_file:
+            try:
+                data = {"occupied": sorted([list(c) for c in self._cells])}
+                self.state_file.write_text(json.dumps(data, indent=2))
+            except Exception:
+                pass
+
+    def status(self) -> str:
+        n   = len(self._cells)
+        tot = self.nx * self.ny
+        if n == 0:
+            return f"grid {self.nx}×{self.ny}: all {tot} cells empty"
+        cells = sorted(self._cells, key=lambda c: (c[1], c[0]))
+        return f"grid {self.nx}×{self.ny}: {n}/{tot} occupied — {cells}"
+
+
 # ── executors ──────────────────────────────────────────────────────────────────
 
 class GraspExecutor(ABC):
+    def __init__(self) -> None:
+        self._occupancy: OccupancyGrid | None = None
+        self._pending_cell: tuple[int, int] | None = None
+
     @abstractmethod
     def execute_tool(self, name: str, tool_input: dict) -> str: ...
+
+    def _occupancy_pre(self, name: str, tool_input: dict) -> str | None:
+        """Intercept occupancy tools; also gate move_to_grid_cell on free cells.
+        Returns a result string if the call is fully handled, None to continue dispatch."""
+        occ = self._occupancy
+        if name == "find_empty_cell":
+            if occ is None:
+                return "error: no grid loaded"
+            cell = occ.next_empty()
+            return f"i={cell[0]} j={cell[1]}" if cell else "error: all cells are occupied"
+        if name == "reset_occupancy":
+            if occ is not None:
+                occ.reset()
+            return "occupancy grid cleared — all cells empty"
+        if name == "move_to_grid_cell" and occ is not None:
+            try:
+                i, j = int(tool_input["i"]), int(tool_input["j"])
+            except (KeyError, ValueError):
+                return None
+            if occ.is_occupied(i, j):
+                alt = occ.next_empty()
+                hint = f" Try i={alt[0]} j={alt[1]}." if alt else " No empty cells remain."
+                return f"error: cell ({i},{j}) is already occupied.{hint}"
+            self._pending_cell = (i, j)
+        return None
+
+    def _occupancy_post_drop(self, result: str) -> None:
+        """Mark the pending cell occupied once drop_block succeeds."""
+        if self._occupancy and self._pending_cell and not result.startswith("error"):
+            self._occupancy.mark_occupied(*self._pending_cell)
+            self._pending_cell = None
 
     def info(self) -> str:
         return ""
@@ -100,12 +199,23 @@ class GraspExecutor(ABC):
 
 
 class DryRunGraspExecutor(GraspExecutor):
+    def __init__(self, nx: int = 4, ny: int = 3) -> None:
+        super().__init__()
+        self._occupancy = OccupancyGrid(nx, ny)
+
     def execute_tool(self, name: str, tool_input: dict) -> str:
+        result = self._occupancy_pre(name, tool_input)
+        if result is not None:
+            return result
         args_str = ", ".join(f"{k}={v!r}" for k, v in tool_input.items())
-        return f"dry-run: {name}({args_str})"
+        result = f"dry-run: {name}({args_str})"
+        if name == "drop_block":
+            self._occupancy_post_drop(result)
+        return result
 
     def info(self) -> str:
-        return "Backend: dry-run (no hardware)"
+        occ = self._occupancy.status() if self._occupancy else "no grid"
+        return f"Backend: dry-run (no hardware) | {occ}"
 
 
 class ReBotGraspExecutor(GraspExecutor):
@@ -115,7 +225,9 @@ class ReBotGraspExecutor(GraspExecutor):
         grid_file: Path,
         arm_config: str | None,
         duration: float,
+        state_file: Path | None = None,
     ) -> None:
+        super().__init__()
         sys.path.insert(0, str(_REPO_ROOT))
         sys.path.insert(0, str(_REPO_ROOT / "reBotArm_control_py"))
 
@@ -153,6 +265,8 @@ class ReBotGraspExecutor(GraspExecutor):
             gcfg = yaml.safe_load(grid_file.read_text())
             self.grid_nx = gcfg["grid"]["nx"]
             self.grid_ny = gcfg["grid"]["ny"]
+            self._occupancy = OccupancyGrid(self.grid_nx, self.grid_ny, state_file)
+            self._occupancy.load()
 
         # Initialise hardware
         self.arm     = RobotArm(cfg_path=arm_config)
@@ -186,7 +300,10 @@ class ReBotGraspExecutor(GraspExecutor):
         print("At home. Ready.")
 
     def execute_tool(self, name: str, tool_input: dict) -> str:
-        return self._dispatch(
+        pre = self._occupancy_pre(name, tool_input)
+        if pre is not None:
+            return pre
+        result = self._dispatch(
             name, tool_input,
             ctrl=self.ctrl,
             arm=self.arm,
@@ -198,13 +315,14 @@ class ReBotGraspExecutor(GraspExecutor):
             lookup=self.lookup,
             duration=self.duration,
         )
+        if name == "drop_block":
+            self._occupancy_post_drop(result)
+        return result
 
     def info(self) -> str:
         pos_names = [n for n in self._raw if n.lower() not in self._JOINT_LABELS]
-        grid_info = (
-            f"grid {self.grid_nx}×{self.grid_ny}" if self.grid_nx > 0 else "no grid loaded"
-        )
-        return f"positions: {', '.join(pos_names)}  |  {grid_info}"
+        occ = self._occupancy.status() if self._occupancy else "no grid loaded"
+        return f"positions: {', '.join(pos_names)}  |  {occ}"
 
     def close(self) -> None:
         try:
@@ -518,6 +636,8 @@ Examples:
     parser.add_argument("--voice",          default="marin")
     parser.add_argument("--positions-file", default=DEFAULT_POSITIONS_FILE)
     parser.add_argument("--grid-file",      default=DEFAULT_GRID_FILE)
+    parser.add_argument("--state-file",     default=DEFAULT_STATE_FILE,
+                        help="JSON file shared with grid_gui.py for occupancy sync.")
     parser.add_argument("--arm-config",     default=None,
                         help="Path to reBotArm arm.yaml (auto-detected when omitted).")
     parser.add_argument("--duration",       type=float, default=2.0,
@@ -540,6 +660,10 @@ Examples:
     if not grid_path.is_absolute():
         grid_path = _REPO_ROOT / grid_path
 
+    state_path = Path(args.state_file)
+    if not state_path.is_absolute():
+        state_path = _REPO_ROOT / state_path
+
     sys.path.insert(0, str(_REPO_ROOT))
     from move_repl_xy import AGENT_TOOLS  # noqa: PLC0415
     openai_tools = _to_openai_tools(AGENT_TOOLS)
@@ -553,6 +677,7 @@ Examples:
             grid_file=grid_path,
             arm_config=args.arm_config,
             duration=args.duration,
+            state_file=state_path,
         )
 
     context_info = executor.info()

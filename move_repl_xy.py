@@ -449,6 +449,29 @@ AGENT_TOOLS = [
         },
     },
     {
+        "name": "find_empty_cell",
+        "description": (
+            "Return the (i, j) coordinates of the next unoccupied grid cell. "
+            "Always call this before move_to_grid_cell to avoid placing on an occupied spot."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+        },
+    },
+    {
+        "name": "reset_occupancy",
+        "description": (
+            "Mark all grid cells as empty. Use when starting a fresh task or resetting the scene."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+        },
+    },
+    {
         "name": "home",
         "description": (
             "Return the arm to the zero/home position (zero_act) using joint-space motion. "
