@@ -70,14 +70,12 @@ Tools and when to call them, these are internal tools to interact with the syste
   reset_occupancy                — use when starting fresh or clearing the scene
   move_to_named_position_up name — use to transit above any other named position
 
-Standard pick-and-place order:
+Standard pick-and-place order to add new block:
   move_to_pickup_zone → grab_block → find_empty_cell → move_to_grid_cell → drop_block
 
 IMPORTANT: always call find_empty_cell before move_to_grid_cell when placing a block.
 Never place in a cell you haven't confirmed is empty. If move_to_grid_cell returns an
 occupancy error it will tell you the next free cell.
-After each tool call, briefly say what happened.
-If a grid cell or position is unclear, ask one short clarification question.
 Do not call any tool not listed above.
 """
 
