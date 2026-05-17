@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rebot-b601-sim"
+version = "0.1.0"
+description = "Pinocchio/MeshCat simulation helpers for Seeed reBot Arm B601-DM."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "numpy>=1.23",
+  "meshcat>=0.3.2",
+  "pin>=2.7",
+]
+
+[project.optional-dependencies]
+leader = [
+  "pyyaml>=6.0",
+]
+mujoco = [
+  "mujoco>=3.2.0",
+]
+
+[project.scripts]
+rebot-b601-sim = "rebot_b601_sim.sim_robot:main"
+rebot-b601-leader-sim = "rebot_b601_sim.leader_to_sim:main"
+rebot-b601-mujoco = "rebot_b601_sim.mujoco_sim:main"
+rebot-b601-leader-mujoco = "rebot_b601_sim.leader_to_mujoco:main"
+rebot-b601-setup-sim = "rebot_b601_sim.setup_simulation:main"
+rebot-b601-move = "rebot_b601_sim.move_robot:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

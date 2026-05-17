@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pose_pipeline"
+version = "0.0.1"
+description = "Zero-shot 6D pose estimation for CAD-known blocks on the Seeed reBot B601."
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.24",
+    "scipy>=1.10",
+    "opencv-python>=4.8",
+    "pyyaml>=6.0",
+    "trimesh>=4.0",
+    "torch>=2.1",
+    "torchvision>=0.16",
+    "transformers>=4.40",
+    "pillow>=10.0",
+]
+
+[project.optional-dependencies]
+pinocchio = ["pin>=2.7"]  # optional FK backend
+dev = ["pytest>=8.0", "ruff>=0.4"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["pose_pipeline*"]

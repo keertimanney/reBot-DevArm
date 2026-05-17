@@ -1,0 +1,31 @@
+# Pose pipeline default configuration.
+# Override at construction time by loading and editing this dict.
+
+models:
+  grounding_dino: "IDEA-Research/grounding-dino-base"
+  sam2: "facebook/sam2-hiera-large"
+  depth_anything: "depth-anything/Depth-Anything-V2-Base"
+
+thresholds:
+  grounding_box: 0.30        # min Grounding DINO box score
+  grounding_text: 0.25       # min text-image similarity
+  min_pose_confidence: 0.40  # below this, treat detection as unreliable
+
+foundation_pose:
+  refine_iters: 5            # FoundationPose pose refinement iterations
+  rgb_only_at_close_range: true
+
+workspace:
+  # Pose of the table surface in robot base frame. Used to anchor metric depth.
+  # Calibrate this once: place a flat object at z=0 in your CAD frame, measure.
+  table_z: 0.000             # meters
+
+observe_pose:
+  # Joint configuration the motion stack moves to before calling estimate().
+  # B601-DM has 6 joints; gripper not part of the observe configuration.
+  # These are placeholders — measure the actual pose for your setup.
+  q_observe_deg: [0.0, -30.0, 60.0, 0.0, 60.0, 0.0]
+
+camera_resolution:
+  top:   [1280, 720]
+  wrist: [1280, 720]
