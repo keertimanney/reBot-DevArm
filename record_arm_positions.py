@@ -18,7 +18,12 @@ def add_control_package_to_path(repo_root: Path) -> None:
 
 
 def read_pose(arm: Any, joint_to_pose: Any) -> dict[str, Any]:
-    q, vel, torq = arm.get_state()
+    # Actively request fresh motor feedback before computing FK. This mirrors
+    # the observation-read pattern used by robot recording loops; a passive
+    # get_state() can return stale cached zeros when no control loop is running.
+    q = arm.get_positions(request=True)
+    vel = arm.get_velocities(request=False)
+    torq = arm.get_torques(request=False)
     q = np.asarray(q, dtype=np.float64)
     vel = np.asarray(vel, dtype=np.float64)
     torq = np.asarray(torq, dtype=np.float64)
@@ -137,4 +142,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
