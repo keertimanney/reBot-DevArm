@@ -1,0 +1,20 @@
+positions:
+  A:
+    xyz: [0.35, 0.0, 0.15]
+    yaw: 0.0
+  B:
+    xyz: [0.40, 0.10, 0.10]
+    yaw: 0.0
+  C:
+    xyz: [0.35, 0.35, 0.15]
+    yaw: 0.0
+
+motion:
+  # ArmEndPos orientation is roll/pitch/yaw in radians. The IK_MOTION guide uses
+  # pitch=pi/2 for an end-effector-down convention.
+  roll: 0.0
+  pitch: 1.5707963267948966
+  duration: 2.0
+  approach_height: 0.05
+  clearance_z: 0.18
+

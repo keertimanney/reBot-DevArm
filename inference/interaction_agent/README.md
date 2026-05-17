@@ -60,6 +60,28 @@ The default model is `gpt-realtime-2`. You can override it:
 python -m inference.interaction_agent.run_realtime_text --model gpt-realtime-2
 ```
 
+## OpenAI Realtime Voice + IK Motion
+
+The repo root also includes a single-file voice demo that can call the real
+reBot IK motion controller:
+
+```bash
+export OPENAI_API_KEY="..."
+python realtime_voice_move_object.py
+```
+
+It loads named positions from `realtime_positions.yaml`. The default positions
+are `A`, `B`, and `C`, backed by calibrated XYZ coordinates in metres. Use
+`--dry-run` to test Realtime tool calls without connecting to the arm:
+
+```bash
+python realtime_voice_move_object.py --dry-run
+```
+
+The hardware path uses `reBotArm_control_py.actuator.RobotArm` and
+`ArmEndPos.move_to_traj(...)`, so the Python environment must have the arm
+dependencies available, including `motorbridge` and `pinocchio`.
+
 ## Architecture
 
 ```text
