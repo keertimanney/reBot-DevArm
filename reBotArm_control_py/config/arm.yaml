@@ -1,7 +1,7 @@
 # reBotArm 机械臂配置文件
 
 # 通信方式: CAN (can0 / can1) 或 串口桥 (/dev/ttyACM0)
-channel: /dev/ttyACM0
+channel: /dev/tty.usbmodem00000000050C1
 
 # 控制循环频率 (Hz)
 rate: 500

@@ -1,6 +1,6 @@
 # reBotArm 夹爪配置文件
 
-channel: /dev/ttyACM0
+channel: /dev/tty.usbmodem00000000050C1
 
 gripper:
   - name: gripper
