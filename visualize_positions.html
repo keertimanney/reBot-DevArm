@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>reBot Arm Positions - 3D View</title>
+    <style>
+        body { margin: 0; overflow: hidden; font-family: sans-serif; background: #1a1a2e; }
+        #info { position: absolute; top: 10px; left: 10px; color: #eee; font-size: 14px; z-index: 10; }
+        #info h3 { margin: 0 0 8px 0; }
+        .label { color: #fff; font-size: 12px; }
+    </style>
+</head>
+<body>
+    <div id="info">
+        <h3>reBot Arm End-Effector Positions</h3>
+        <p>Drag to rotate | Scroll to zoom | Right-click to pan</p>
+    </div>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <script>
+        const positions = {
+            "zero": [0.26030584, 0.00000004, 0.19170069],
+            "zero_act": [0.25979487, 0.00381133, 0.21072769],
+            "A": [0.59765025, -0.18206922, 0.11481264],
+            "B": [0.18909402, -0.29004300, 0.08453417],
+            "C": [0.50752417, 0.27513388, 0.08682568],
+            "D": [0.21708551, 0.29102209, 0.08545525],
+            "center": [0.41426663, 0.03799704, 0.04918802]
+        };
+
+        const colors = {
+            "zero": 0xffffff,
+            "zero_act": 0xaaaaaa,
+            "A": 0xff4444,
+            "B": 0x44ff44,
+            "C": 0x4444ff,
+            "D": 0xffff44,
+            "center": 0xff44ff
+        };
+
+        // Scene setup
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x1a1a2e);
+
+        const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.01, 100);
+        camera.position.set(0.8, 0.5, 0.8);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        document.body.appendChild(renderer.domElement);
+
+        const controls = new THREE.OrbitControls(camera, renderer.domElement);
+        controls.target.set(0.35, 0, 0.12);
+        controls.update();
+
+        // Grid
+        const gridHelper = new THREE.GridHelper(1, 10, 0x444466, 0x333355);
+        scene.add(gridHelper);
+
+        // Axes
+        const axesHelper = new THREE.AxesHelper(0.3);
+        scene.add(axesHelper);
+
+        // Lights
+        scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+        const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+        dirLight.position.set(1, 2, 1);
+        scene.add(dirLight);
+
+        // Add points and labels
+        const labelDiv = document.createElement('div');
+        labelDiv.style.position = 'absolute';
+        labelDiv.style.top = '0';
+        labelDiv.style.left = '0';
+        labelDiv.style.pointerEvents = 'none';
+        document.body.appendChild(labelDiv);
+
+        const spheres = [];
+        const labelData = [];
+
+        for (const [name, xyz] of Object.entries(positions)) {
+            // Sphere
+            const geo = new THREE.SphereGeometry(0.012, 16, 16);
+            const mat = new THREE.MeshPhongMaterial({ color: colors[name], emissive: colors[name], emissiveIntensity: 0.3 });
+            const sphere = new THREE.Mesh(geo, mat);
+            // Map: x->x, y->z (up), z->-y (depth) for better viewing
+            sphere.position.set(xyz[0], xyz[2], -xyz[1]);
+            scene.add(sphere);
+            spheres.push(sphere);
+            labelData.push({ name, mesh: sphere });
+        }
+
+        // Connect workspace points (A, B, C, D) with lines
+        const workspaceOrder = ["A", "B", "D", "C"]; // form a rough quadrilateral
+        const linePoints = [];
+        // Actually connect A->C (top), C->D, D->B, B->A to form workspace boundary
+        const boundary = ["A", "C", "D", "B", "A"];
+        for (const name of boundary) {
+            const xyz = positions[name];
+            linePoints.push(new THREE.Vector3(xyz[0], xyz[2], -xyz[1]));
+        }
+        const lineGeo = new THREE.BufferGeometry().setFromPoints(linePoints);
+        const lineMat = new THREE.LineBasicMaterial({ color: 0x66aaff, opacity: 0.6, transparent: true });
+        scene.add(new THREE.Line(lineGeo, lineMat));
+
+        // Line from origin to center
+        const originPt = positions["zero"];
+        const centerPt = positions["center"];
+        const armLine = new THREE.BufferGeometry().setFromPoints([
+            new THREE.Vector3(originPt[0], originPt[2], -originPt[1]),
+            new THREE.Vector3(centerPt[0], centerPt[2], -centerPt[1])
+        ]);
+        scene.add(new THREE.Line(armLine, new THREE.LineBasicMaterial({ color: 0xff88ff, opacity: 0.5, transparent: true })));
+
+        // Render loop with labels
+        function animate() {
+            requestAnimationFrame(animate);
+            controls.update();
+            renderer.render(scene, camera);
+
+            // Update 2D labels
+            let html = '';
+            for (const { name, mesh } of labelData) {
+                const pos = mesh.position.clone().project(camera);
+                const x = (pos.x * 0.5 + 0.5) * window.innerWidth;
+                const y = (-pos.y * 0.5 + 0.5) * window.innerHeight;
+                if (pos.z < 1) {
+                    const color = '#' + colors[name].toString(16).padStart(6, '0');
+                    html += `<div style="position:absolute;left:${x+8}px;top:${y-8}px;color:${color};font-size:13px;font-weight:bold;text-shadow:1px 1px 2px #000">${name}</div>`;
+                }
+            }
+            labelDiv.innerHTML = html;
+        }
+        animate();
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+    </script>
+</body>
+</html>
