@@ -52,71 +52,72 @@ from reBotArm_control_py.kinematics import joint_to_pose
 
 from compute_grid import compute_grid_map
 
-
 # ── Z presets — edit to match your table setup ────────────────────────────────
 
-_Z_UP   = 0.15    # m — raised/transit height
-_Z_DOWN = 0.075   # m — table/contact height
+_Z_UP = 0.15  # m — raised/transit height
+_Z_DOWN = 0.075  # m — table/contact height
 
 # ── grab / drop Z heights (tune per object) ───────────────────────────────────
 
-_GRAB_FACE_UP_Z   = 0.10    # m — lift height after face grab
-_GRAB_FACE_DOWN_Z = 0.045   # m — contact height for face grab
+_GRAB_FACE_UP_Z = 0.10  # m — lift height after face grab
+_GRAB_FACE_DOWN_Z = 0.045  # m — contact height for face grab
 
-_GRAB_EDGE_UP_Z   = 0.12    # m — lift height after edge grab
-_GRAB_EDGE_DOWN_Z = 0.065   # m — contact height for edge grab
+_GRAB_EDGE_UP_Z = 0.12  # m — lift height after edge grab
+_GRAB_EDGE_DOWN_Z = 0.065  # m — contact height for edge grab
 
-_DROP_FACE_UP_Z   = 0.10    # m — lift height after face drop
-_DROP_FACE_DOWN_Z = 0.040   # m — release height for face drop
+_DROP_FACE_UP_Z = 0.10  # m — lift height after face drop
+_DROP_FACE_DOWN_Z = 0.040  # m — release height for face drop
 
-_DROP_EDGE_UP_Z   = 0.12    # m — lift height after edge drop
-_DROP_EDGE_DOWN_Z = 0.055   # m — release height for edge drop
+_DROP_EDGE_UP_Z = 0.12  # m — lift height after edge drop
+_DROP_EDGE_DOWN_Z = 0.055  # m — release height for edge drop
 
-_GRAB_EDGE_YAW    = math.pi / 4   # rad — 45° yaw for edge grab/drop
+_GRAB_EDGE_YAW = math.pi / 4  # rad — 45° yaw for edge grab/drop
 
-_GRIPPER_SETTLE    = 0.8    # s — wait after each gripper command
+_GRIPPER_SETTLE = 0.8  # s — wait after each gripper command
 
 # ── per-function gripper poses (tune open/close independently) ────────────────
 # Scale: 0.0 = fully open, 6.5 = fully closed
 
-_GRAB_FACE_OPEN  = 2.5    # rad — open before face grab
-_GRAB_FACE_CLOSE = 3.8000    # rad — close after face grab
+_GRAB_FACE_OPEN = 2.5  # rad — open before face grab
+_GRAB_FACE_CLOSE = 3.8000  # rad — close after face grab
 
-_GRAB_EDGE_OPEN  = 2.5    # rad — open before edge grab
-_GRAB_EDGE_CLOSE = 4.65    # rad — close after edge grab
+_GRAB_EDGE_OPEN = 2.5  # rad — open before edge grab
+_GRAB_EDGE_CLOSE = 4.65  # rad — close after edge grab
 
-_DROP_FACE_OPEN  = 2.5    # rad — open to release (face drop)
-_DROP_EDGE_OPEN  = 2.5    # rad — open to release (edge drop)
+_DROP_FACE_OPEN = 2.5  # rad — open to release (face drop)
+_DROP_EDGE_OPEN = 2.5  # rad — open to release (edge drop)
 
 # ── manual open/close command angles ──────────────────────────────────────────
 
-_OPEN_GRIPPER_POSE  = 0.0   # rad — `open`  command
-_CLOSE_GRIPPER_POSE = 1.5   # rad — `close` command
+_OPEN_GRIPPER_POSE = 0.0  # rad — `open`  command
+_CLOSE_GRIPPER_POSE = 1.5  # rad — `close` command
 
 # ── motion constants ───────────────────────────────────────────────────────────
 
-_DEFAULT_SPEED = 0.5   # rad/s for joint-space moves
-_MIN_DURATION  = 2.0
-_HOME_LABEL    = "zero_act"
-_JOINT_LABELS  = {"zero", "zero_act"}   # always use joint-space for these
+_DEFAULT_SPEED = 0.5  # rad/s for joint-space moves
+_MIN_DURATION = 2.0
+_HOME_LABEL = "zero_act"
+_JOINT_LABELS = {"zero", "zero_act"}  # always use joint-space for these
 
 
 # ── gripper handle ─────────────────────────────────────────────────────────────
+
 
 def _make_gripper_handle(arm: Any) -> Any:
     class _GripperHandle:
         _RATE = 100.0
 
         def __init__(self, ctrl: Any, mot: Any) -> None:
-            self._ctrl   = ctrl
-            self._mot    = mot
-            self._target : float | None = None
-            self._lock   = threading.Lock()
+            self._ctrl = ctrl
+            self._mot = mot
+            self._target: float | None = None
+            self._lock = threading.Lock()
             self._running = False
-            self._thread : threading.Thread | None = None
+            self._thread: threading.Thread | None = None
 
         def start(self) -> None:
             from motorbridge import Mode
+
             try:
                 self._mot.clear_error()
             except Exception:
@@ -174,10 +175,14 @@ def _make_gripper_handle(arm: Any) -> Any:
 
         def get_position(self, request: bool = True) -> float:
             if request:
-                try: self._mot.request_feedback()
-                except Exception: pass
-                try: self._ctrl.poll_feedback_once()
-                except Exception: pass
+                try:
+                    self._mot.request_feedback()
+                except Exception:
+                    pass
+                try:
+                    self._ctrl.poll_feedback_once()
+                except Exception:
+                    pass
             try:
                 st = self._mot.get_state()
                 return float(st.pos) if st is not None else 0.0
@@ -191,7 +196,7 @@ def _make_gripper_handle(arm: Any) -> Any:
 
     try:
         ctrl = list(arm._ctrl_map.values())[0]
-        mot  = ctrl.add_damiao_motor(0x07, 0x17, "4310")
+        mot = ctrl.add_damiao_motor(0x07, 0x17, "4310")
         return _GripperHandle(ctrl, mot)
     except Exception as exc:
         print(f"[warn] Gripper not available ({exc})")
@@ -200,11 +205,14 @@ def _make_gripper_handle(arm: Any) -> Any:
 
 # ── joint-space trajectory ─────────────────────────────────────────────────────
 
+
 def _min_jerk(tau: float) -> float:
     return 10 * tau**3 - 15 * tau**4 + 6 * tau**5
 
 
-def _move_joints(ctrl: ArmEndPos, arm: RobotArm, q_target: np.ndarray, duration: float) -> None:
+def _move_joints(
+    ctrl: ArmEndPos, arm: RobotArm, q_target: np.ndarray, duration: float
+) -> None:
     q_start, _, _ = arm.get_state()
     n = max(2, int(duration / 0.02))
     ctrl._stop_send.set()
@@ -232,6 +240,7 @@ def _move_joints(ctrl: ArmEndPos, arm: RobotArm, q_target: np.ndarray, duration:
 
 # ── IK move ────────────────────────────────────────────────────────────────────
 
+
 def _ik_move(ctrl, x, y, z, roll, pitch, yaw, duration, label="") -> bool:
     tag = f" [{label}]" if label else ""
     print(
@@ -239,7 +248,9 @@ def _ik_move(ctrl, x, y, z, roll, pitch, yaw, duration, label="") -> bool:
         f"rpy_deg=[{math.degrees(roll):+.1f}, {math.degrees(pitch):+.1f}, "
         f"{math.degrees(yaw):+.1f}]  dur={duration:.1f}s …"
     )
-    ok = ctrl.move_to_traj(x=x, y=y, z=z, roll=roll, pitch=pitch, yaw=yaw, duration=duration)
+    ok = ctrl.move_to_traj(
+        x=x, y=y, z=z, roll=roll, pitch=pitch, yaw=yaw, duration=duration
+    )
     if ok:
         time.sleep(duration + 0.1)
         print("  done.")
@@ -264,6 +275,7 @@ def zero_gripper(gripper: Any) -> None:
         print("[zero_gripper] no gripper attached")
         return
     from motorbridge import Mode
+
     try:
         gripper._mot.clear_error()
         print("[zero_gripper] error cleared")
@@ -288,10 +300,14 @@ def zero_gripper(gripper: Any) -> None:
     print("[zero_gripper] → 0.0 rad")
 
 
-def grab_face(ctrl: Any, arm: Any, gripper: Any,
-              up_z: float = _GRAB_FACE_UP_Z,
-              down_z: float = _GRAB_FACE_DOWN_Z,
-              duration: float = _MIN_DURATION) -> None:
+def grab_face(
+    ctrl: Any,
+    arm: Any,
+    gripper: Any,
+    up_z: float = _GRAB_FACE_UP_Z,
+    down_z: float = _GRAB_FACE_DOWN_Z,
+    duration: float = _MIN_DURATION,
+) -> None:
     """Open → lower (yaw=0) → close → raise."""
     pos, _ = _current_pose(arm)
     x, y = pos[0], pos[1]
@@ -300,82 +316,184 @@ def grab_face(ctrl: Any, arm: Any, gripper: Any,
         gripper.move_to(_GRAB_FACE_OPEN)
         time.sleep(_GRIPPER_SETTLE)
     print(f"  [grab_face] lower z={down_z:.3f} m …")
-    _ik_move(ctrl, x, y, down_z, roll=0.0, pitch=math.pi / 2, yaw=0.0,
-             duration=duration, label="face:down")
+    _ik_move(
+        ctrl,
+        x,
+        y,
+        down_z,
+        roll=0.0,
+        pitch=math.pi / 2,
+        yaw=0.0,
+        duration=duration,
+        label="face:down",
+    )
     if gripper:
         print("  [grab_face] close …")
         gripper.move_to(_GRAB_FACE_CLOSE)
         time.sleep(_GRIPPER_SETTLE)
     print(f"  [grab_face] raise z={up_z:.3f} m …")
-    _ik_move(ctrl, x, y, up_z, roll=0.0, pitch=math.pi / 2, yaw=0.0,
-             duration=duration, label="face:up")
+    _ik_move(
+        ctrl,
+        x,
+        y,
+        up_z,
+        roll=0.0,
+        pitch=math.pi / 2,
+        yaw=0.0,
+        duration=duration,
+        label="face:up",
+    )
 
 
-def grab_edge(ctrl: Any, arm: Any, gripper: Any,
-              up_z: float = _GRAB_EDGE_UP_Z,
-              down_z: float = _GRAB_EDGE_DOWN_Z,
-              duration: float = _MIN_DURATION) -> None:
+def grab_edge(
+    ctrl: Any,
+    arm: Any,
+    gripper: Any,
+    up_z: float = _GRAB_EDGE_UP_Z,
+    down_z: float = _GRAB_EDGE_DOWN_Z,
+    duration: float = _MIN_DURATION,
+) -> None:
     """Rotate 45° → open → lower → close → raise."""
     pos, _ = _current_pose(arm)
     x, y, z_now = pos[0], pos[1], pos[2]
     print(f"  [grab_edge] rotate yaw={math.degrees(_GRAB_EDGE_YAW):.0f}° …")
-    _ik_move(ctrl, x, y, z_now, roll=0.0, pitch=math.pi / 2, yaw=_GRAB_EDGE_YAW,
-             duration=duration, label="edge:rotate")
+    _ik_move(
+        ctrl,
+        x,
+        y,
+        z_now,
+        roll=0.0,
+        pitch=math.pi / 2,
+        yaw=_GRAB_EDGE_YAW,
+        duration=duration,
+        label="edge:rotate",
+    )
     if gripper:
         print("  [grab_edge] open …")
         gripper.move_to(_GRAB_EDGE_OPEN)
         time.sleep(_GRIPPER_SETTLE)
     print(f"  [grab_edge] lower z={down_z:.3f} m …")
-    _ik_move(ctrl, x, y, down_z, roll=0.0, pitch=math.pi / 2, yaw=_GRAB_EDGE_YAW,
-             duration=duration, label="edge:down")
+    _ik_move(
+        ctrl,
+        x,
+        y,
+        down_z,
+        roll=0.0,
+        pitch=math.pi / 2,
+        yaw=_GRAB_EDGE_YAW,
+        duration=duration,
+        label="edge:down",
+    )
     if gripper:
         print("  [grab_edge] close …")
         gripper.move_to(_GRAB_EDGE_CLOSE)
         time.sleep(_GRIPPER_SETTLE)
     print(f"  [grab_edge] raise z={up_z:.3f} m …")
-    _ik_move(ctrl, x, y, up_z, roll=0.0, pitch=math.pi / 2, yaw=_GRAB_EDGE_YAW,
-             duration=duration, label="edge:up")
+    _ik_move(
+        ctrl,
+        x,
+        y,
+        up_z,
+        roll=0.0,
+        pitch=math.pi / 2,
+        yaw=_GRAB_EDGE_YAW,
+        duration=duration,
+        label="edge:up",
+    )
 
 
-def drop_face(ctrl: Any, arm: Any, gripper: Any,
-              up_z: float = _DROP_FACE_UP_Z,
-              down_z: float = _DROP_FACE_DOWN_Z,
-              duration: float = _MIN_DURATION) -> None:
+def drop_face(
+    ctrl: Any,
+    arm: Any,
+    gripper: Any,
+    up_z: float = _DROP_FACE_UP_Z,
+    down_z: float = _DROP_FACE_DOWN_Z,
+    duration: float = _MIN_DURATION,
+) -> None:
     """Lower (yaw=0) → open → raise."""
     pos, _ = _current_pose(arm)
     x, y = pos[0], pos[1]
     print(f"  [drop_face] lower z={down_z:.3f} m …")
-    _ik_move(ctrl, x, y, down_z, roll=0.0, pitch=math.pi / 2, yaw=0.0,
-             duration=duration, label="face:down")
+    _ik_move(
+        ctrl,
+        x,
+        y,
+        down_z,
+        roll=0.0,
+        pitch=math.pi / 2,
+        yaw=0.0,
+        duration=duration,
+        label="face:down",
+    )
     if gripper:
         print("  [drop_face] open …")
         gripper.move_to(_DROP_FACE_OPEN)
         time.sleep(_GRIPPER_SETTLE)
     print(f"  [drop_face] raise z={up_z:.3f} m …")
-    _ik_move(ctrl, x, y, up_z, roll=0.0, pitch=math.pi / 2, yaw=0.0,
-             duration=duration, label="face:up")
+    _ik_move(
+        ctrl,
+        x,
+        y,
+        up_z,
+        roll=0.0,
+        pitch=math.pi / 2,
+        yaw=0.0,
+        duration=duration,
+        label="face:up",
+    )
 
 
-def drop_edge(ctrl: Any, arm: Any, gripper: Any,
-              up_z: float = _DROP_EDGE_UP_Z,
-              down_z: float = _DROP_EDGE_DOWN_Z,
-              duration: float = _MIN_DURATION) -> None:
+def drop_edge(
+    ctrl: Any,
+    arm: Any,
+    gripper: Any,
+    up_z: float = _DROP_EDGE_UP_Z,
+    down_z: float = _DROP_EDGE_DOWN_Z,
+    duration: float = _MIN_DURATION,
+) -> None:
     """Rotate 45° → lower → open → raise."""
     pos, _ = _current_pose(arm)
     x, y, z_now = pos[0], pos[1], pos[2]
     print(f"  [drop_edge] rotate yaw={math.degrees(_GRAB_EDGE_YAW):.0f}° …")
-    _ik_move(ctrl, x, y, z_now, roll=0.0, pitch=math.pi / 2, yaw=_GRAB_EDGE_YAW,
-             duration=duration, label="edge:rotate")
+    _ik_move(
+        ctrl,
+        x,
+        y,
+        z_now,
+        roll=0.0,
+        pitch=math.pi / 2,
+        yaw=_GRAB_EDGE_YAW,
+        duration=duration,
+        label="edge:rotate",
+    )
     print(f"  [drop_edge] lower z={down_z:.3f} m …")
-    _ik_move(ctrl, x, y, down_z, roll=0.0, pitch=math.pi / 2, yaw=_GRAB_EDGE_YAW,
-             duration=duration, label="edge:down")
+    _ik_move(
+        ctrl,
+        x,
+        y,
+        down_z,
+        roll=0.0,
+        pitch=math.pi / 2,
+        yaw=_GRAB_EDGE_YAW,
+        duration=duration,
+        label="edge:down",
+    )
     if gripper:
         print("  [drop_edge] open …")
         gripper.move_to(_DROP_EDGE_OPEN)
         time.sleep(_GRIPPER_SETTLE)
     print(f"  [drop_edge] raise z={up_z:.3f} m …")
-    _ik_move(ctrl, x, y, up_z, roll=0.0, pitch=math.pi / 2, yaw=_GRAB_EDGE_YAW,
-             duration=duration, label="edge:up")
+    _ik_move(
+        ctrl,
+        x,
+        y,
+        up_z,
+        roll=0.0,
+        pitch=math.pi / 2,
+        yaw=_GRAB_EDGE_YAW,
+        duration=duration,
+        label="edge:up",
+    )
 
 
 # ── Agent tool descriptions & dispatcher ──────────────────────────────────────
@@ -424,8 +542,14 @@ AGENT_TOOLS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "i": {"type": "integer", "description": "Column index (0-based, left→right)."},
-                "j": {"type": "integer", "description": "Row index (0-based, front→back)."},
+                "i": {
+                    "type": "integer",
+                    "description": "Column index (0-based, left→right).",
+                },
+                "j": {
+                    "type": "integer",
+                    "description": "Row index (0-based, front→back).",
+                },
             },
             "required": ["i", "j"],
         },
@@ -460,8 +584,8 @@ AGENT_TOOLS = [
             "properties": {
                 "from_i": {"type": "integer", "description": "Source column index."},
                 "from_j": {"type": "integer", "description": "Source row index."},
-                "to_i":   {"type": "integer", "description": "Destination column index."},
-                "to_j":   {"type": "integer", "description": "Destination row index."},
+                "to_i": {"type": "integer", "description": "Destination column index."},
+                "to_j": {"type": "integer", "description": "Destination row index."},
                 "grip_style": {
                     "type": "string",
                     "enum": ["face", "edge"],
@@ -529,20 +653,28 @@ AGENT_TOOLS = [
 ]
 
 
-def _tool_move_to_pickup_zone(
-    ctrl: Any, lookup: dict, duration: float
-) -> str:
+def _tool_move_to_pickup_zone(ctrl: Any, lookup: dict, duration: float) -> str:
     if "a" not in lookup:
         return "error: position 'A' not found in recorded positions"
     _, entry = lookup["a"]
-    ee  = entry.get("end_effector", {})
+    ee = entry.get("end_effector", {})
     xyz = ee.get("xyz")
     if not xyz:
         return "error: position 'A' has no end_effector XY data"
-    ok = _ik_move(ctrl, xyz[0], xyz[1], _Z_UP,
-                  roll=0.0, pitch=math.pi / 2, yaw=0.0,
-                  duration=duration, label="pickup_zone(A up)")
-    return "moved to pickup zone (A up)" if ok else "IK failed — pickup zone unreachable"
+    ok = _ik_move(
+        ctrl,
+        xyz[0],
+        xyz[1],
+        _Z_UP,
+        roll=0.0,
+        pitch=math.pi / 2,
+        yaw=0.0,
+        duration=duration,
+        label="pickup_zone(A up)",
+    )
+    return (
+        "moved to pickup zone (A up)" if ok else "IK failed — pickup zone unreachable"
+    )
 
 
 def _tool_grab_block(
@@ -558,10 +690,12 @@ def _tool_grab_block(
 
 
 def _tool_move_to_grid_cell(
-    i: int, j: int,
+    i: int,
+    j: int,
     ctrl: Any,
     grid_map: dict,
-    grid_nx: int, grid_ny: int,
+    grid_nx: int,
+    grid_ny: int,
     grid_z: float,
     duration: float,
 ) -> str:
@@ -570,10 +704,22 @@ def _tool_move_to_grid_cell(
     if (i, j) not in grid_map:
         return f"error: cell ({i},{j}) out of range — grid is {grid_nx}×{grid_ny}"
     gx, gy = grid_map[(i, j)]
-    ok = _ik_move(ctrl, gx, gy, grid_z,
-                  roll=0.0, pitch=math.pi / 2, yaw=0.0,
-                  duration=duration, label=f"grid({i},{j})")
-    return f"moved to grid cell ({i},{j})" if ok else f"IK failed — grid({i},{j}) unreachable"
+    ok = _ik_move(
+        ctrl,
+        gx,
+        gy,
+        grid_z,
+        roll=0.0,
+        pitch=math.pi / 2,
+        yaw=0.0,
+        duration=duration,
+        label=f"grid({i},{j})",
+    )
+    return (
+        f"moved to grid cell ({i},{j})"
+        if ok
+        else f"IK failed — grid({i},{j}) unreachable"
+    )
 
 
 def _tool_drop_block(
@@ -597,23 +743,36 @@ def _tool_move_to_named_up(
     if low not in lookup:
         return f"error: position '{pos_name}' not found in recorded positions"
     _, entry = lookup[low]
-    ee  = entry.get("end_effector", {})
+    ee = entry.get("end_effector", {})
     xyz = ee.get("xyz")
     if not xyz:
         return f"error: position '{pos_name}' has no end_effector XY data"
-    ok = _ik_move(ctrl, xyz[0], xyz[1], _Z_UP,
-                  roll=0.0, pitch=math.pi / 2, yaw=0.0,
-                  duration=duration, label=f"{pos_name} up")
+    ok = _ik_move(
+        ctrl,
+        xyz[0],
+        xyz[1],
+        _Z_UP,
+        roll=0.0,
+        pitch=math.pi / 2,
+        yaw=0.0,
+        duration=duration,
+        label=f"{pos_name} up",
+    )
     return f"moved to {pos_name} up" if ok else f"IK failed — {pos_name} up unreachable"
 
 
 def _tool_move_block_in_grid(
-    from_i: int, from_j: int,
-    to_i: int, to_j: int,
+    from_i: int,
+    from_j: int,
+    to_i: int,
+    to_j: int,
     grip_style: str,
-    ctrl: Any, arm: Any, gripper: Any,
+    ctrl: Any,
+    arm: Any,
+    gripper: Any,
     grid_map: dict,
-    grid_nx: int, grid_ny: int,
+    grid_nx: int,
+    grid_ny: int,
     grid_z: float,
     duration: float,
 ) -> str:
@@ -627,9 +786,17 @@ def _tool_move_block_in_grid(
     sx, sy = grid_map[(from_i, from_j)]
     tx, ty = grid_map[(to_i, to_j)]
 
-    if not _ik_move(ctrl, sx, sy, _Z_UP,
-                    roll=0.0, pitch=math.pi / 2, yaw=0.0,
-                    duration=duration, label=f"src({from_i},{from_j})"):
+    if not _ik_move(
+        ctrl,
+        sx,
+        sy,
+        _Z_UP,
+        roll=0.0,
+        pitch=math.pi / 2,
+        yaw=0.0,
+        duration=duration,
+        label=f"src({from_i},{from_j})",
+    ):
         return f"IK failed — source ({from_i},{from_j}) unreachable"
 
     _DZ = 0.007
@@ -638,9 +805,17 @@ def _tool_move_block_in_grid(
     else:
         grab_face(ctrl, arm, gripper, down_z=_GRAB_FACE_DOWN_Z - _DZ, duration=duration)
 
-    if not _ik_move(ctrl, tx, ty, _Z_UP,
-                    roll=0.0, pitch=math.pi / 2, yaw=0.0,
-                    duration=duration, label=f"dst({to_i},{to_j})"):
+    if not _ik_move(
+        ctrl,
+        tx,
+        ty,
+        _Z_UP,
+        roll=0.0,
+        pitch=math.pi / 2,
+        yaw=0.0,
+        duration=duration,
+        label=f"dst({to_i},{to_j})",
+    ):
         return f"IK failed — destination ({to_i},{to_j}) unreachable (block still held)"
 
     if grip_style == "edge":
@@ -683,8 +858,14 @@ def dispatch_tool(
         )
     if name == "move_to_grid_cell":
         return _tool_move_to_grid_cell(
-            int(tool_input["i"]), int(tool_input["j"]),
-            ctrl, grid_map, grid_nx, grid_ny, grid_z, duration,
+            int(tool_input["i"]),
+            int(tool_input["j"]),
+            ctrl,
+            grid_map,
+            grid_nx,
+            grid_ny,
+            grid_z,
+            duration,
         )
     if name == "drop_block":
         return _tool_drop_block(
@@ -692,10 +873,19 @@ def dispatch_tool(
         )
     if name == "move_block_in_grid":
         return _tool_move_block_in_grid(
-            int(tool_input["from_i"]), int(tool_input["from_j"]),
-            int(tool_input["to_i"]),   int(tool_input["to_j"]),
+            int(tool_input["from_i"]),
+            int(tool_input["from_j"]),
+            int(tool_input["to_i"]),
+            int(tool_input["to_j"]),
             tool_input.get("grip_style", "edge"),
-            ctrl, arm, gripper, grid_map, grid_nx, grid_ny, grid_z, duration,
+            ctrl,
+            arm,
+            gripper,
+            grid_map,
+            grid_nx,
+            grid_ny,
+            grid_z,
+            duration,
         )
     if name == "home":
         return _tool_home(ctrl, arm, lookup, duration)
@@ -725,6 +915,7 @@ def _resolve_z(modifier: str | None, recorded_z: float) -> float | None:
 
 # ── REPL ───────────────────────────────────────────────────────────────────────
 
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="XY+Z REPL — supply Z per-command; zero/zero_act use joint-space.",
@@ -744,11 +935,13 @@ def main() -> None:
         sys.exit(f"Positions file not found: {positions_path}")
 
     data = yaml.safe_load(positions_path.read_text()) or {}
-    raw  = data.get("positions") or {}
+    raw = data.get("positions") or {}
     if not raw:
         sys.exit(f"No 'positions' found in {positions_path}")
     if _HOME_LABEL not in raw:
-        sys.exit(f"'{_HOME_LABEL}' not in {positions_path}. Re-run record_arm_positions.py.")
+        sys.exit(
+            f"'{_HOME_LABEL}' not in {positions_path}. Re-run record_arm_positions.py."
+        )
 
     lookup = {name.lower(): (name, entry) for name, entry in raw.items()}
 
@@ -757,13 +950,15 @@ def main() -> None:
         if name.lower() in _JOINT_LABELS:
             print(f"  {name}: [joint-space]")
         else:
-            ee  = entry.get("end_effector", {})
+            ee = entry.get("end_effector", {})
             xyz = [round(v, 4) for v in ee.get("xyz", [])]
             rpy = [round(math.degrees(v), 1) for v in ee.get("rpy_rad", [])]
             print(f"  {name}: xyz={xyz}  rpy_deg={rpy}")
 
     print(f"\nZ presets:  up={_Z_UP} m   down={_Z_DOWN} m")
-    print(f"Gripper:    open={_OPEN_GRIPPER_POSE} rad   close={_CLOSE_GRIPPER_POSE} rad\n")
+    print(
+        f"Gripper:    open={_OPEN_GRIPPER_POSE} rad   close={_CLOSE_GRIPPER_POSE} rad\n"
+    )
 
     grid_map: dict[tuple[int, int], tuple[float, float]] = {}
     grid_z: float = _Z_UP
@@ -780,8 +975,8 @@ def main() -> None:
     else:
         print(f"[grid] No grid file at {grid_path} — 'grid' command unavailable.")
 
-    arm     = RobotArm(cfg_path=args.arm_cfg)
-    ctrl    = ArmEndPos(arm)
+    arm = RobotArm(cfg_path=args.arm_cfg)
+    ctrl = ArmEndPos(arm)
     gripper = _make_gripper_handle(arm)
 
     print("Connecting and enabling motors …")
@@ -789,9 +984,11 @@ def main() -> None:
     if gripper is not None:
         gripper.start()
 
-    q_home   = np.array(raw[_HOME_LABEL]["joints_rad"], dtype=np.float64)
+    q_home = np.array(raw[_HOME_LABEL]["joints_rad"], dtype=np.float64)
     q_now, _, _ = arm.get_state()
-    home_dur = max(_MIN_DURATION, float(np.max(np.abs(q_home - q_now))) / _DEFAULT_SPEED)
+    home_dur = max(
+        _MIN_DURATION, float(np.max(np.abs(q_home - q_now))) / _DEFAULT_SPEED
+    )
     print(f"Moving to '{_HOME_LABEL}' ({home_dur:.1f}s) …")
     _move_joints(ctrl, arm, q_home, home_dur)
     print("At home. Ready.\n")
@@ -810,7 +1007,7 @@ def main() -> None:
                 continue
 
             parts = cmd.split()
-            low   = parts[0].lower()
+            low = parts[0].lower()
 
             # ── quit ──────────────────────────────────────────────────────────
             if low in ("q", "quit", "exit"):
@@ -824,7 +1021,10 @@ def main() -> None:
                 else:
                     q_target = q_home
                 q_now, _, _ = arm.get_state()
-                dur = max(_MIN_DURATION, float(np.max(np.abs(q_target - q_now))) / _DEFAULT_SPEED)
+                dur = max(
+                    _MIN_DURATION,
+                    float(np.max(np.abs(q_target - q_now))) / _DEFAULT_SPEED,
+                )
                 print(f"Going to '{low}' (joint-space, {dur:.1f}s) …")
                 _move_joints(ctrl, arm, q_target, dur)
                 print("Done.")
@@ -836,7 +1036,7 @@ def main() -> None:
                     if name.lower() in _JOINT_LABELS:
                         print(f"  {name}: [joint-space]")
                     else:
-                        ee  = entry.get("end_effector", {})
+                        ee = entry.get("end_effector", {})
                         xyz = [round(v, 4) for v in ee.get("xyz", [])]
                         rpy = [round(math.degrees(v), 1) for v in ee.get("rpy_rad", [])]
                         print(f"  {name}: xyz={xyz}  rpy_deg={rpy}")
@@ -866,8 +1066,12 @@ def main() -> None:
                 pos, rpy = _current_pose(arm)
                 _ik_move(
                     ctrl,
-                    x=pos[0]+dx, y=pos[1]+dy, z=pos[2]+dz,
-                    roll=rpy[0], pitch=rpy[1], yaw=rpy[2],
+                    x=pos[0] + dx,
+                    y=pos[1] + dy,
+                    z=pos[2] + dz,
+                    roll=rpy[0],
+                    pitch=rpy[1],
+                    yaw=rpy[2],
                     duration=default_dur,
                     label=f"rel {dx:+.3f} {dy:+.3f} {dz:+.3f}",
                 )
@@ -929,21 +1133,31 @@ def main() -> None:
                     print("  No grid loaded. Pass --grid-file or add grid_config.yaml.")
                     continue
                 if len(parts) != 3:
-                    print(f"  Usage: grid <i> <j>   (i: 0..{grid_nx-1}, j: 0..{grid_ny-1})")
+                    print(
+                        f"  Usage: grid <i> <j>   (i: 0..{grid_nx-1}, j: 0..{grid_ny-1})"
+                    )
                     continue
                 try:
                     gi, gj = int(parts[1]), int(parts[2])
                 except ValueError:
-                    print(f"  Usage: grid <i> <j>   (i: 0..{grid_nx-1}, j: 0..{grid_ny-1})")
+                    print(
+                        f"  Usage: grid <i> <j>   (i: 0..{grid_nx-1}, j: 0..{grid_ny-1})"
+                    )
                     continue
                 if (gi, gj) not in grid_map:
-                    print(f"  Cell ({gi}, {gj}) out of range. Grid is {grid_nx}×{grid_ny}.")
+                    print(
+                        f"  Cell ({gi}, {gj}) out of range. Grid is {grid_nx}×{grid_ny}."
+                    )
                     continue
                 gx, gy = grid_map[(gi, gj)]
                 _ik_move(
                     ctrl,
-                    x=gx, y=gy, z=grid_z,
-                    roll=0.0, pitch=math.pi / 2, yaw=0.0,
+                    x=gx,
+                    y=gy,
+                    z=grid_z,
+                    roll=0.0,
+                    pitch=math.pi / 2,
+                    yaw=0.0,
                     duration=default_dur,
                     label=f"grid({gi},{gj})",
                 )
@@ -964,7 +1178,7 @@ def main() -> None:
             if low in _JOINT_LABELS:
                 continue
 
-            ee  = entry.get("end_effector", {})
+            ee = entry.get("end_effector", {})
             xyz = ee.get("xyz")
             rpy = ee.get("rpy_rad")
 
@@ -986,9 +1200,9 @@ def main() -> None:
                 # roll=0, pitch=π/2, yaw=0 gives a consistent pointing-down
                 # orientation so up/down moves are pure Z translations.
                 # Use `<name>` with no modifier to replay the recorded yaw.
-                use_roll  = 0.0
+                use_roll = 0.0
                 use_pitch = math.pi / 2
-                use_yaw   = 0.0
+                use_yaw = 0.0
             else:
                 # No modifier → replay the exact recorded orientation.
                 use_roll, use_pitch, use_yaw = rpy[0], rpy[1], rpy[2]
@@ -996,8 +1210,12 @@ def main() -> None:
             z_label = z_tok if z_tok else "file"
             _ik_move(
                 ctrl,
-                x=xyz[0], y=xyz[1], z=z,
-                roll=use_roll, pitch=use_pitch, yaw=use_yaw,
+                x=xyz[0],
+                y=xyz[1],
+                z=z,
+                roll=use_roll,
+                pitch=use_pitch,
+                yaw=use_yaw,
                 duration=default_dur,
                 label=f"{canonical} z={z_label}",
             )
