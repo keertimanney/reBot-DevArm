@@ -1,0 +1,24 @@
+{
+  "objects": [
+    {
+      "name": "red_cube",
+      "mesh": "../assets/cube_10cm.stl",
+      "mass": 0.1,
+      "color": "0xd94b3d",
+      "pose": {
+        "xyz": [0.32, -0.12, 0.05],
+        "rpy": [0.0, 0.0, 0.0]
+      }
+    },
+    {
+      "name": "blue_cube",
+      "mesh": "../assets/cube_10cm.stl",
+      "mass": 0.1,
+      "color": "0x2b6fd6",
+      "pose": {
+        "xyz": [0.42, 0.14, 0.05],
+        "rpy": [0.0, 0.0, 0.7853981634]
+      }
+    }
+  ]
+}
