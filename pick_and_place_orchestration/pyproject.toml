@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rebot-pick-place"
+version = "0.1.0"
+description = "Orchestration-facing motion and control interfaces for reBot B601 pick-and-place."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "numpy>=1.23",
+  "pin>=2.7",
+  "rebot-b601-sim",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+

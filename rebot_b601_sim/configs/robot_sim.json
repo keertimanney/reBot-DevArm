@@ -1,0 +1,12 @@
+{
+  "urdf": null,
+  "joint_order": [
+    "shoulder_pan",
+    "shoulder_lift",
+    "elbow_flex",
+    "wrist_flex",
+    "wrist_yaw",
+    "wrist_roll"
+  ]
+}
+

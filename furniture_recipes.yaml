@@ -1,0 +1,41 @@
+# Furniture recipes
+#
+# Each recipe is a sequence of grid cells (i = column 0..nx-1, j = row 0..ny-1)
+# that, taken together, represent one piece of furniture made of blocks.
+#
+# The voice agent reads this file at startup and includes a compact summary in
+# the system prompt so the model knows the canonical shapes. build_furniture_demo.py
+# reads the same file to drive the arm directly.
+#
+# Coordinate convention (matches grid_config.yaml):
+#   i = 0  -> left wall    i = nx-1 -> right wall
+#   j = 0  -> front of room  j = ny-1 -> back wall
+#
+# Cells are listed in the order they should be placed.
+
+recipes:
+
+  bed:
+    description: >
+      A 2-wide x 3-deep bed against the back-left wall. Headboard at the back
+      (j=3), foot of the bed forward (j=1).
+    shape: "2 cols x 3 rows"
+    cells:
+      - [0, 3]   # headboard row, left
+      - [1, 3]   # headboard row, right
+      - [0, 2]
+      - [1, 2]
+      - [0, 1]   # foot, left
+      - [1, 1]   # foot, right
+
+  l_sofa:
+    description: >
+      An L-shaped sofa tucked into the front-right corner. Three blocks along
+      the front (j=0), then two turning back along the right wall (i=6).
+    shape: "L shape: 3 + 2"
+    cells:
+      - [4, 0]   # long arm — leftmost
+      - [5, 0]
+      - [6, 0]   # corner of the L
+      - [6, 1]   # short arm — first segment up the right wall
+      - [6, 2]
